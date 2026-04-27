@@ -1,0 +1,2255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SoloCarousel</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body style="margin:0">
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+
+// ─── localStorage SHIM (replaces Claude artifact window.storage) ─────────────
+async function storageGet(key) {
+  try {
+    const v = localStorage.getItem('sc:' + key);
+    return v != null ? { value: v } : null;
+  } catch { return null; }
+}
+async function storageSet(key, value) {
+  try {
+    localStorage.setItem('sc:' + key, value);
+    return { key, value };
+  } catch { return null; }
+}
+async function storageDel(key) {
+  try {
+    localStorage.removeItem('sc:' + key);
+    return { key, deleted: true };
+  } catch { return null; }
+}
+async function storageList(prefix) {
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('sc:' + prefix)) keys.push(k.slice(3));
+    }
+    return { keys };
+  } catch { return { keys: [] }; }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+
+const W = 1080, H = 1440;
+
+const BASE_PALETTES = {
+  warm: [
+    { from: '#F5E6D3', to: '#E8B86A', text: '#2B1810' },
+    { from: '#FFE4C4', to: '#E8956B', text: '#2B1810' },
+    { from: '#FFD4A3', to: '#C97B3F', text: '#FFFFFF' },
+    { from: '#F4D4B0', to: '#8B4513', text: '#FFFFFF' },
+    { from: '#E8B86A', to: '#5C3A1E', text: '#FFFFFF' },
+    { from: '#C97B3F', to: '#2B1810', text: '#FFFFFF' },
+    { from: '#8B4513', to: '#1A0E05', text: '#FFFFFF' },
+    { from: '#2B1810', to: '#0A0504', text: '#F5E6D3' },
+  ],
+  mono: [
+    { from: '#FFFFFF', to: '#E8E8E8', text: '#0A0A0A' },
+    { from: '#F0F0F0', to: '#C8C8C8', text: '#0A0A0A' },
+    { from: '#D0D0D0', to: '#808080', text: '#0A0A0A' },
+    { from: '#A0A0A0', to: '#404040', text: '#FFFFFF' },
+    { from: '#606060', to: '#202020', text: '#FFFFFF' },
+    { from: '#303030', to: '#000000', text: '#FFFFFF' },
+    { from: '#1A1A1A', to: '#000000', text: '#FFFFFF' },
+    { from: '#000000', to: '#0A0A0A', text: '#FFFFFF' },
+  ],
+  acid: [
+    { from: '#F0FFB8', to: '#C8E600', text: '#0A1400' },
+    { from: '#D8FF4D', to: '#7FAD00', text: '#0A1400' },
+    { from: '#C8E600', to: '#1A3300', text: '#FFFFFF' },
+    { from: '#7FAD00', to: '#0A1400', text: '#D8FF4D' },
+    { from: '#1A3300', to: '#000000', text: '#D8FF4D' },
+    { from: '#D8FF4D', to: '#1A3300', text: '#0A1400' },
+    { from: '#000000', to: '#1A3300', text: '#D8FF4D' },
+    { from: '#D8FF4D', to: '#C8E600', text: '#0A1400' },
+  ],
+  cool: [
+    { from: '#E0EDFF', to: '#A8C8EC', text: '#0A1A2E' },
+    { from: '#C8DEFA', to: '#5B8DCE', text: '#FFFFFF' },
+    { from: '#A8C8EC', to: '#2E5F9E', text: '#FFFFFF' },
+    { from: '#5B8DCE', to: '#1A3668', text: '#FFFFFF' },
+    { from: '#2E5F9E', to: '#0A1A2E', text: '#FFFFFF' },
+    { from: '#1A3668', to: '#050A15', text: '#A8C8EC' },
+    { from: '#0A1A2E', to: '#000000', text: '#A8C8EC' },
+    { from: '#A8C8EC', to: '#2E5F9E', text: '#FFFFFF' },
+  ],
+  dusk: [
+    { from: '#FFD4C2', to: '#E8A8B8', text: '#2E1A2E' },
+    { from: '#E8A8B8', to: '#9E5B8D', text: '#FFFFFF' },
+    { from: '#C284A8', to: '#5B2E5F', text: '#FFFFFF' },
+    { from: '#9E5B8D', to: '#2E1A3E', text: '#FFD4C2' },
+    { from: '#5B2E5F', to: '#1A0A2E', text: '#FFD4C2' },
+    { from: '#2E1A3E', to: '#050015', text: '#E8A8B8' },
+    { from: '#1A0A2E', to: '#000000', text: '#E8A8B8' },
+    { from: '#FFD4C2', to: '#9E5B8D', text: '#FFFFFF' },
+  ],
+  forest: [
+    { from: '#E8F5E9', to: '#A5D6A7', text: '#1B3320' },
+    { from: '#A5D6A7', to: '#4CAF50', text: '#FFFFFF' },
+    { from: '#66BB6A', to: '#1B5E20', text: '#FFFFFF' },
+    { from: '#2E7D32', to: '#0D2818', text: '#FFFFFF' },
+    { from: '#1B5E20', to: '#000000', text: '#A5D6A7' },
+    { from: '#4CAF50', to: '#1B3320', text: '#FFFFFF' },
+    { from: '#0D2818', to: '#000000', text: '#A5D6A7' },
+    { from: '#A5D6A7', to: '#2E7D32', text: '#FFFFFF' },
+  ],
+  sunset: [
+    { from: '#FFE5B4', to: '#FF8C42', text: '#3D1A00' },
+    { from: '#FF8C42', to: '#E63946', text: '#FFFFFF' },
+    { from: '#E63946', to: '#6A0572', text: '#FFFFFF' },
+    { from: '#6A0572', to: '#1A0333', text: '#FFD4A3' },
+    { from: '#FF6B6B', to: '#C44569', text: '#FFFFFF' },
+    { from: '#C44569', to: '#3D1A00', text: '#FFE5B4' },
+    { from: '#1A0333', to: '#000000', text: '#FF8C42' },
+    { from: '#FFE5B4', to: '#E63946', text: '#FFFFFF' },
+  ],
+  ocean: [
+    { from: '#CAF0F8', to: '#00B4D8', text: '#03045E' },
+    { from: '#00B4D8', to: '#0077B6', text: '#FFFFFF' },
+    { from: '#0096C7', to: '#023E8A', text: '#FFFFFF' },
+    { from: '#0077B6', to: '#03045E', text: '#FFFFFF' },
+    { from: '#023E8A', to: '#000814', text: '#CAF0F8' },
+    { from: '#03045E', to: '#000000', text: '#00B4D8' },
+    { from: '#CAF0F8', to: '#0077B6', text: '#FFFFFF' },
+    { from: '#000814', to: '#000000', text: '#00B4D8' },
+  ],
+};
+
+const EXAMPLE_HOOKS = [
+  "I built a bot that writes my IG carousels all night",
+  "5 สัญญาณว่าคุณกำลังสร้างสิ่งที่ผิด",
+  "วิธีเพิ่ม follower 1000 คนใน 30 วัน",
+  "The prompt that 10x'd my newsletter",
+];
+
+const QUICK_COLORS = [
+  '#FFFFFF', '#000000', '#FF3B30', '#FF9500', '#FFCC00',
+  '#34C759', '#00C7BE', '#0A84FF', '#5E5CE6', '#AF52DE',
+  '#FF2D55', '#A2845E',
+];
+
+const DEFAULT_TRANSFORM = { scale: 1, offsetX: 0, offsetY: 0 };
+
+// ─── FONTS ──────────────────────────────────────────────────────────────────
+
+const FONTS = [
+  { id: 'helvetica', name: 'Helvetica', family: `-apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, "Noto Sans Thai", sans-serif`, group: 'system' },
+
+  // Thai Sans (12)
+  { id: 'noto-sans-thai', name: 'Noto Sans Thai', family: `"Noto Sans Thai", sans-serif`, group: 'thai' },
+  { id: 'ibm-plex-thai', name: 'IBM Plex Sans Thai', family: `"IBM Plex Sans Thai", sans-serif`, group: 'thai' },
+  { id: 'ibm-plex-thai-looped', name: 'IBM Plex Thai Looped', family: `"IBM Plex Sans Thai Looped", sans-serif`, group: 'thai' },
+  { id: 'prompt', name: 'Prompt', family: `"Prompt", sans-serif`, group: 'thai' },
+  { id: 'kanit', name: 'Kanit', family: `"Kanit", sans-serif`, group: 'thai' },
+  { id: 'sarabun', name: 'Sarabun', family: `"Sarabun", sans-serif`, group: 'thai' },
+  { id: 'mitr', name: 'Mitr', family: `"Mitr", sans-serif`, group: 'thai' },
+  { id: 'mali', name: 'Mali', family: `"Mali", sans-serif`, group: 'thai' },
+  { id: 'k2d', name: 'K2D', family: `"K2D", sans-serif`, group: 'thai' },
+  { id: 'krub', name: 'Krub', family: `"Krub", sans-serif`, group: 'thai' },
+  { id: 'bai-jamjuree', name: 'Bai Jamjuree', family: `"Bai Jamjuree", sans-serif`, group: 'thai' },
+  { id: 'chakra-petch', name: 'Chakra Petch', family: `"Chakra Petch", sans-serif`, group: 'thai' },
+
+  // Thai Serif (4)
+  { id: 'noto-serif-thai', name: 'Noto Serif Thai', family: `"Noto Serif Thai", serif`, group: 'thai-serif' },
+  { id: 'maitree', name: 'Maitree', family: `"Maitree", serif`, group: 'thai-serif' },
+  { id: 'pridi', name: 'Pridi', family: `"Pridi", serif`, group: 'thai-serif' },
+  { id: 'taviraj', name: 'Taviraj', family: `"Taviraj", serif`, group: 'thai-serif' },
+  { id: 'niramit', name: 'Niramit', family: `"Niramit", sans-serif`, group: 'thai-serif' },
+
+  // Thai Display (2)
+  { id: 'charm', name: 'Charm', family: `"Charm", cursive`, group: 'thai-display' },
+  { id: 'sriracha', name: 'Sriracha', family: `"Sriracha", cursive`, group: 'thai-display' },
+
+  // English Sans (28)
+  { id: 'inter', name: 'Inter', family: `"Inter", sans-serif`, group: 'english' },
+  { id: 'roboto', name: 'Roboto', family: `"Roboto", sans-serif`, group: 'english' },
+  { id: 'open-sans', name: 'Open Sans', family: `"Open Sans", sans-serif`, group: 'english' },
+  { id: 'lato', name: 'Lato', family: `"Lato", sans-serif`, group: 'english' },
+  { id: 'montserrat', name: 'Montserrat', family: `"Montserrat", sans-serif`, group: 'english' },
+  { id: 'poppins', name: 'Poppins', family: `"Poppins", sans-serif`, group: 'english' },
+  { id: 'raleway', name: 'Raleway', family: `"Raleway", sans-serif`, group: 'english' },
+  { id: 'nunito', name: 'Nunito', family: `"Nunito", sans-serif`, group: 'english' },
+  { id: 'dm-sans', name: 'DM Sans', family: `"DM Sans", sans-serif`, group: 'english' },
+  { id: 'work-sans', name: 'Work Sans', family: `"Work Sans", sans-serif`, group: 'english' },
+  { id: 'manrope', name: 'Manrope', family: `"Manrope", sans-serif`, group: 'english' },
+  { id: 'space-grotesk', name: 'Space Grotesk', family: `"Space Grotesk", sans-serif`, group: 'english' },
+  { id: 'outfit', name: 'Outfit', family: `"Outfit", sans-serif`, group: 'english' },
+  { id: 'plus-jakarta', name: 'Plus Jakarta Sans', family: `"Plus Jakarta Sans", sans-serif`, group: 'english' },
+  { id: 'sora', name: 'Sora', family: `"Sora", sans-serif`, group: 'english' },
+  { id: 'bricolage', name: 'Bricolage Grotesque', family: `"Bricolage Grotesque", sans-serif`, group: 'english' },
+  { id: 'hanken-grotesk', name: 'Hanken Grotesk', family: `"Hanken Grotesk", sans-serif`, group: 'english' },
+  { id: 'figtree', name: 'Figtree', family: `"Figtree", sans-serif`, group: 'english' },
+  { id: 'karla', name: 'Karla', family: `"Karla", sans-serif`, group: 'english' },
+  { id: 'mulish', name: 'Mulish', family: `"Mulish", sans-serif`, group: 'english' },
+  { id: 'quicksand', name: 'Quicksand', family: `"Quicksand", sans-serif`, group: 'english' },
+  { id: 'rubik', name: 'Rubik', family: `"Rubik", sans-serif`, group: 'english' },
+  { id: 'urbanist', name: 'Urbanist', family: `"Urbanist", sans-serif`, group: 'english' },
+  { id: 'archivo', name: 'Archivo', family: `"Archivo", sans-serif`, group: 'english' },
+  { id: 'albert-sans', name: 'Albert Sans', family: `"Albert Sans", sans-serif`, group: 'english' },
+  { id: 'geologica', name: 'Geologica', family: `"Geologica", sans-serif`, group: 'english' },
+  { id: 'onest', name: 'Onest', family: `"Onest", sans-serif`, group: 'english' },
+  { id: 'host-grotesk', name: 'Host Grotesk', family: `"Host Grotesk", sans-serif`, group: 'english' },
+
+  // English Serif (12)
+  { id: 'fraunces', name: 'Fraunces', family: `"Fraunces", serif`, group: 'english-serif' },
+  { id: 'playfair', name: 'Playfair Display', family: `"Playfair Display", serif`, group: 'english-serif' },
+  { id: 'merriweather', name: 'Merriweather', family: `"Merriweather", serif`, group: 'english-serif' },
+  { id: 'lora', name: 'Lora', family: `"Lora", serif`, group: 'english-serif' },
+  { id: 'eb-garamond', name: 'EB Garamond', family: `"EB Garamond", serif`, group: 'english-serif' },
+  { id: 'crimson', name: 'Crimson Pro', family: `"Crimson Pro", serif`, group: 'english-serif' },
+  { id: 'bitter', name: 'Bitter', family: `"Bitter", serif`, group: 'english-serif' },
+  { id: 'dm-serif', name: 'DM Serif Display', family: `"DM Serif Display", serif`, group: 'english-serif' },
+  { id: 'cormorant', name: 'Cormorant Garamond', family: `"Cormorant Garamond", serif`, group: 'english-serif' },
+  { id: 'source-serif', name: 'Source Serif 4', family: `"Source Serif 4", serif`, group: 'english-serif' },
+  { id: 'newsreader', name: 'Newsreader', family: `"Newsreader", serif`, group: 'english-serif' },
+  { id: 'libre-caslon', name: 'Libre Caslon Text', family: `"Libre Caslon Text", serif`, group: 'english-serif' },
+
+  // English Display (3)
+  { id: 'instrument-serif', name: 'Instrument Serif', family: `"Instrument Serif", serif`, group: 'english-display' },
+  { id: 'shrikhand', name: 'Shrikhand', family: `"Shrikhand", cursive`, group: 'english-display' },
+  { id: 'caprasimo', name: 'Caprasimo', family: `"Caprasimo", cursive`, group: 'english-display' },
+];
+
+const GROUP_LABELS = {
+  'system': 'System',
+  'thai': 'ภาษาไทย · Sans',
+  'thai-serif': 'ภาษาไทย · Serif',
+  'thai-display': 'ภาษาไทย · Display',
+  'english': 'English · Sans',
+  'english-serif': 'English · Serif',
+  'english-display': 'English · Display',
+};
+
+// Google Fonts URLs (split into 3 chunks to keep each URL under safe length)
+const GF_FAMILIES_THAI = [
+  'Noto+Sans+Thai:wght@400;500;600;700',
+  'Noto+Serif+Thai:wght@400;500;600;700',
+  'IBM+Plex+Sans+Thai:wght@400;500;600;700',
+  'IBM+Plex+Sans+Thai+Looped:wght@400;500;600;700',
+  'Prompt:wght@400;500;600;700',
+  'Kanit:wght@400;500;600;700',
+  'Sarabun:wght@400;500;700',
+  'Mitr:wght@400;500;600;700',
+  'Mali:wght@400;500;600;700',
+  'K2D:wght@400;500;600;700',
+  'Krub:wght@400;500;600;700',
+  'Bai+Jamjuree:wght@400;500;600;700',
+  'Chakra+Petch:wght@400;500;600;700',
+  'Maitree:wght@400;500;600;700',
+  'Pridi:wght@400;500;600;700',
+  'Taviraj:wght@400;500;600;700',
+  'Niramit:wght@400;500;600;700',
+  'Charm:wght@400;700',
+  'Sriracha',
+];
+const GF_FAMILIES_ENG_SANS = [
+  'Inter:wght@400;500;600;700',
+  'Roboto:wght@400;500;700',
+  'Open+Sans:wght@400;500;600;700',
+  'Lato:wght@400;700',
+  'Montserrat:wght@400;500;600;700',
+  'Poppins:wght@400;500;600;700',
+  'Raleway:wght@400;500;600;700',
+  'Nunito:wght@400;500;600;700',
+  'DM+Sans:wght@400;500;600;700',
+  'Work+Sans:wght@400;500;600;700',
+  'Manrope:wght@400;500;600;700',
+  'Space+Grotesk:wght@400;500;600;700',
+  'Outfit:wght@400;500;600;700',
+  'Plus+Jakarta+Sans:wght@400;500;600;700',
+  'Sora:wght@400;500;600;700',
+  'Bricolage+Grotesque:wght@400;500;600;700',
+  'Hanken+Grotesk:wght@400;500;600;700',
+  'Figtree:wght@400;500;600;700',
+  'Karla:wght@400;500;600;700',
+  'Mulish:wght@400;500;600;700',
+  'Quicksand:wght@400;500;600;700',
+  'Rubik:wght@400;500;600;700',
+  'Urbanist:wght@400;500;600;700',
+  'Archivo:wght@400;500;600;700',
+  'Albert+Sans:wght@400;500;600;700',
+  'Geologica:wght@400;500;600;700',
+  'Onest:wght@400;500;600;700',
+  'Host+Grotesk:wght@400;500;600;700',
+];
+const GF_FAMILIES_ENG_SERIF = [
+  'Fraunces:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600',
+  'Playfair+Display:ital,wght@0,400;0,600;0,700;1,400',
+  'Merriweather:ital,wght@0,400;0,700;1,400',
+  'Lora:ital,wght@0,400;0,500;0,600;1,400',
+  'EB+Garamond:ital,wght@0,400;0,500;0,600;1,400',
+  'Crimson+Pro:ital,wght@0,400;0,600;1,400',
+  'Bitter:ital,wght@0,400;0,500;0,600;0,700',
+  'DM+Serif+Display:ital@0;1',
+  'Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400',
+  'Source+Serif+4:ital,wght@0,400;0,500;0,600;0,700;1,400',
+  'Newsreader:ital,wght@0,400;0,500;0,600;1,400',
+  'Libre+Caslon+Text:ital,wght@0,400;0,700;1,400',
+  'Instrument+Serif:ital@0;1',
+  'Shrikhand',
+  'Caprasimo',
+];
+
+const GF_URL_THAI = `https://fonts.googleapis.com/css2?${GF_FAMILIES_THAI.map(f => 'family=' + f).join('&')}&display=swap`;
+const GF_URL_ENG_SANS = `https://fonts.googleapis.com/css2?${GF_FAMILIES_ENG_SANS.map(f => 'family=' + f).join('&')}&display=swap`;
+const GF_URL_ENG_SERIF = `https://fonts.googleapis.com/css2?${GF_FAMILIES_ENG_SERIF.map(f => 'family=' + f).join('&')}&display=swap`;
+
+const MONO_STACK = `"SF Mono", ui-monospace, Menlo, monospace`;
+
+function getFontFamily(id) {
+  return FONTS.find(f => f.id === id)?.family || FONTS[0].family;
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+function hexToRgb(hex) {
+  const c = (hex || '').replace('#', '');
+  const full = c.length === 3 ? c.split('').map(x => x + x).join('') : c;
+  const n = parseInt(full || '0', 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function rgbToHex(r, g, b) {
+  return '#' + [r, g, b].map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+function rgbStringToHex(s) {
+  if (!s) return null;
+  if (s.startsWith('#')) return s.toUpperCase();
+  const m = s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+  if (m) return rgbToHex(+m[1], +m[2], +m[3]);
+  return null;
+}
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, l = (max + min) / 2;
+  if (max === min) { h = 0; s = 0; }
+  else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+    h *= 60;
+  }
+  return { h, s: s * 100, l: l * 100 };
+}
+function luminance({ r, g, b }) {
+  const [R, G, B] = [r, g, b].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+  return 0.2126 * R + 0.7152 * G + 0.0722 * B;
+}
+function pickTextColor(from, to) {
+  const a = hexToRgb(from), b = hexToRgb(to);
+  return luminance({ r: (a.r + b.r) / 2, g: (a.g + b.g) / 2, b: (a.b + b.b) / 2 }) > 0.5 ? '#0A0A0A' : '#FFFFFF';
+}
+function hslToHex(h, s, l) {
+  s /= 100; l /= 100;
+  const k = n => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return rgbToHex(255 * f(0), 255 * f(8), 255 * f(4));
+}
+function generateRandomPalette() {
+  const hue = Math.random() * 360;
+  const slides = [];
+  for (let i = 0; i < 8; i++) {
+    const t = i / 7;
+    const h1 = (hue + i * 8) % 360;
+    const h2 = (hue + i * 8 + 20) % 360;
+    const sat = 40 + Math.random() * 40;
+    const l1 = 85 - t * 75 + (Math.random() * 10 - 5);
+    const l2 = Math.max(5, l1 - 20 - Math.random() * 10);
+    const from = hslToHex(h1, sat, l1);
+    const to = hslToHex(h2, sat, l2);
+    slides.push({ from, to, text: pickTextColor(from, to) });
+  }
+  return slides;
+}
+function paletteFromColor(baseHex) {
+  const { r, g, b } = hexToRgb(baseHex);
+  const { h, s } = rgbToHsl(r, g, b);
+  const sat = Math.max(35, Math.min(85, s));
+  const slides = [];
+  // 8 progressive shades from light tint → dark shade, with subtle hue rotation
+  for (let i = 0; i < 8; i++) {
+    const t = i / 7;
+    const h1 = (h + (i - 3.5) * 6 + 360) % 360;
+    const h2 = (h + (i - 3.5) * 6 + 18 + 360) % 360;
+    const l1 = 90 - t * 82;
+    const l2 = Math.max(3, l1 - 16);
+    const from = hslToHex(h1, sat, l1);
+    const to = hslToHex(h2, Math.min(100, sat + 5), l2);
+    slides.push({ from, to, text: pickTextColor(from, to) });
+  }
+  return slides;
+}
+
+async function fileToDataUri(file, maxDim = 1440) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let { width: w, height: h } = img;
+        const s = Math.min(1, maxDim / Math.max(w, h));
+        w = Math.round(w * s); h = Math.round(h * s);
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL('image/jpeg', 0.88));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+async function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+// ─── RICH TEXT (with color) ──────────────────────────────────────────────────
+// Segment shape: { text, bold, italic, underline, color? }
+
+function parseRichSegments(raw) {
+  if (!raw) return [{ text: '', bold: false, italic: false, underline: false }];
+  if (typeof raw === 'string') return [{ text: raw, bold: false, italic: false, underline: false }];
+  if (Array.isArray(raw)) return raw.length ? raw : [{ text: '', bold: false, italic: false, underline: false }];
+  return [{ text: String(raw), bold: false, italic: false, underline: false }];
+}
+function segmentsToPlain(segs) {
+  return parseRichSegments(segs).map(s => s.text).join('');
+}
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function segmentsToHtml(segments) {
+  return parseRichSegments(segments).map(s => {
+    let html = escapeHtml(s.text).replace(/\n/g, '<br>');
+    if (s.bold) html = `<b>${html}</b>`;
+    if (s.italic) html = `<i>${html}</i>`;
+    if (s.underline) html = `<u>${html}</u>`;
+    if (s.color) html = `<span style="color:${s.color}">${html}</span>`;
+    return html;
+  }).join('') || '<br>';
+}
+function htmlToSegments(html) {
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  const out = [];
+
+  function walk(node, state) {
+    if (node.nodeType === 3) { out.push({ text: node.textContent, ...state }); return; }
+    if (node.nodeType !== 1) return;
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'br') { out.push({ text: '\n', ...state }); return; }
+    const isBlock = ['div', 'p'].includes(tag);
+    if (isBlock && out.length > 0 && !out[out.length - 1].text.endsWith('\n')) out.push({ text: '\n', ...state });
+    const newState = { ...state };
+    const style = (node.getAttribute('style') || '').toLowerCase();
+    if (tag === 'b' || tag === 'strong' || /font-weight:\s*(bold|[6-9]00)/.test(style)) newState.bold = true;
+    if (tag === 'i' || tag === 'em' || style.includes('italic')) newState.italic = true;
+    if (tag === 'u' || style.includes('underline')) newState.underline = true;
+    // Color: prefer style; fall back to <font color>
+    const styleAttr = node.getAttribute('style') || '';
+    const colorMatch = styleAttr.match(/(?:^|;)\s*color\s*:\s*([^;]+)/i);
+    if (colorMatch) {
+      const hex = rgbStringToHex(colorMatch[1].trim());
+      if (hex) newState.color = hex;
+    } else if (tag === 'font') {
+      const c = node.getAttribute('color');
+      if (c) {
+        const hex = rgbStringToHex(c) || (c.startsWith('#') ? c.toUpperCase() : null);
+        if (hex) newState.color = hex;
+      }
+    }
+    for (const child of node.childNodes) walk(child, newState);
+  }
+  for (const child of div.childNodes) walk(child, { bold: false, italic: false, underline: false });
+
+  const merged = [];
+  for (const seg of out) {
+    if (seg.text === '') continue;
+    const last = merged[merged.length - 1];
+    if (last && last.bold === seg.bold && last.italic === seg.italic && last.underline === seg.underline && last.color === seg.color) {
+      last.text += seg.text;
+    } else merged.push({ ...seg });
+  }
+  return merged.length ? merged : [{ text: '', bold: false, italic: false, underline: false }];
+}
+function segmentsToTokens(segs) {
+  const tokens = [];
+  parseRichSegments(segs).forEach(seg => {
+    const parts = seg.text.split('\n');
+    parts.forEach((part, idx) => {
+      if (idx > 0) tokens.push({ text: '\n', isBreak: true, bold: seg.bold, italic: seg.italic, underline: seg.underline, color: seg.color });
+      if (part) {
+        const words = part.split(/(\s+)/);
+        words.forEach(w => {
+          if (!w) return;
+          tokens.push({ text: w, isSpace: /^\s+$/.test(w), bold: !!seg.bold, italic: !!seg.italic, underline: !!seg.underline, color: seg.color });
+        });
+      }
+    });
+  });
+  return tokens;
+}
+
+// ─── CANVAS HELPERS ──────────────────────────────────────────────────────────
+
+function roundedRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+async function ensureFontsLoaded(fontFamily) {
+  if (!document.fonts?.load) return;
+  try {
+    const family = fontFamily.match(/"([^"]+)"/)?.[1] || fontFamily.split(',')[0].trim();
+    await Promise.all([
+      document.fonts.load(`400 74px "${family}"`),
+      document.fonts.load(`500 74px "${family}"`),
+      document.fonts.load(`600 74px "${family}"`),
+      document.fonts.load(`700 104px "${family}"`),
+      document.fonts.load(`italic 500 74px "${family}"`),
+    ]);
+    await document.fonts.ready;
+  } catch {}
+}
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// ─── ZIP ENCODER ────────────────────────────────────────────────────────────
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c;
+  }
+  return t;
+})();
+function crc32(data) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < data.length; i++) c = CRC_TABLE[(c ^ data[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function createZip(files) {
+  const encoder = new TextEncoder();
+  const chunks = []; const centralDirs = []; let offset = 0;
+  for (const file of files) {
+    const nameBytes = encoder.encode(file.name);
+    const crc = crc32(file.data);
+    const size = file.data.length;
+    const header = new Uint8Array(30 + nameBytes.length);
+    const hv = new DataView(header.buffer);
+    hv.setUint32(0, 0x04034b50, true); hv.setUint16(4, 20, true);
+    hv.setUint32(14, crc, true); hv.setUint32(18, size, true); hv.setUint32(22, size, true);
+    hv.setUint16(26, nameBytes.length, true);
+    header.set(nameBytes, 30);
+    chunks.push(header); chunks.push(file.data);
+    const cd = new Uint8Array(46 + nameBytes.length);
+    const cdv = new DataView(cd.buffer);
+    cdv.setUint32(0, 0x02014b50, true); cdv.setUint16(4, 20, true); cdv.setUint16(6, 20, true);
+    cdv.setUint32(16, crc, true); cdv.setUint32(20, size, true); cdv.setUint32(24, size, true);
+    cdv.setUint16(28, nameBytes.length, true); cdv.setUint32(42, offset, true);
+    cd.set(nameBytes, 46);
+    centralDirs.push(cd);
+    offset += header.length + file.data.length;
+  }
+  const cdStart = offset;
+  let cdSize = 0;
+  for (const cd of centralDirs) { chunks.push(cd); cdSize += cd.length; }
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+  ev.setUint32(12, cdSize, true); ev.setUint32(16, cdStart, true);
+  chunks.push(eocd);
+  return new Blob(chunks, { type: 'application/zip' });
+}
+async function canvasToUint8(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(async blob => {
+      if (!blob) { reject(new Error('Canvas to blob failed')); return; }
+      resolve(new Uint8Array(await blob.arrayBuffer()));
+    }, 'image/png');
+  });
+}
+
+// ─── CANVAS RENDER ───────────────────────────────────────────────────────────
+
+function getFontString(size, weight, italic, family) {
+  return `${italic ? 'italic ' : ''}${weight} ${size}px ${family}`;
+}
+function layoutRichText(ctx, tokens, maxWidth, baseSize, baseWeight, family) {
+  for (const t of tokens) {
+    if (t.isBreak) { t.width = 0; continue; }
+    const w = t.bold ? 700 : baseWeight;
+    ctx.font = getFontString(baseSize, w, t.italic, family);
+    t.width = ctx.measureText(t.text).width;
+  }
+  const lines = []; let cur = []; let curW = 0;
+  const pushLine = () => {
+    while (cur.length && cur[cur.length - 1].isSpace) { curW -= cur[cur.length - 1].width; cur.pop(); }
+    lines.push(cur); cur = []; curW = 0;
+  };
+  for (const t of tokens) {
+    if (t.isBreak) { pushLine(); continue; }
+    if (t.isSpace) { if (cur.length) { cur.push(t); curW += t.width; } continue; }
+    if (curW + t.width > maxWidth && cur.length) { pushLine(); cur = [t]; curW = t.width; }
+    else { cur.push(t); curW += t.width; }
+  }
+  if (cur.length || lines.length === 0) pushLine();
+  return lines;
+}
+
+async function renderSlide(slide, index, palette, handle, photoUrl, transform, fontFamily, layoutOpts = {}) {
+  await ensureFontsLoaded(fontFamily);
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  const isHook = slide.kind === 'hook';
+  const isCTA = slide.kind === 'cta';
+
+  const fontScale = layoutOpts.fontScale || 1;
+  const vAlign = layoutOpts.vAlign || 'middle';
+  const hAlign = layoutOpts.hAlign || 'left';
+
+  let onPhoto = false;
+  if (photoUrl) {
+    try {
+      const img = await loadImage(photoUrl);
+      const imgR = img.naturalWidth / img.naturalHeight;
+      const boxR = W / H;
+      let dw, dh;
+      if (imgR > boxR) { dh = H; dw = H * imgR; } else { dw = W; dh = W / imgR; }
+      ctx.save();
+      ctx.translate(W / 2 + transform.offsetX, H / 2 + transform.offsetY);
+      ctx.scale(transform.scale, transform.scale);
+      ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
+      ctx.restore();
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0, 0, W, H);
+      onPhoto = true;
+    } catch {}
+  }
+  if (!onPhoto) {
+    const g = ctx.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, palette.from); g.addColorStop(1, palette.to);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    const rg = ctx.createRadialGradient(W * 0.8, H * 0.15, 60, W * 0.8, H * 0.15, W * 0.65);
+    rg.addColorStop(0, palette.from); rg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.globalAlpha = 0.35; ctx.fillStyle = rg; ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+
+  const tc = onPhoto ? '#FFFFFF' : palette.text;
+
+  // Slide number
+  ctx.fillStyle = tc;
+  ctx.globalAlpha = 0.9;
+  ctx.font = `500 26px ${fontFamily}`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(String(index + 1).padStart(2, '0'), 80, 120);
+  ctx.globalAlpha = 1;
+
+  // Main text — with size + vertical/horizontal alignment
+  const baseFs = isHook ? 104 : isCTA ? 88 : 74;
+  const fs = baseFs * fontScale;
+  const fw = isHook ? 700 : 500;
+  const maxTW = W - 160;
+  const lh = fs * 1.18;
+
+  const tokens = segmentsToTokens(slide.segments || [{ text: slide.text || '', bold: false, italic: false, underline: false }]);
+  const lines = layoutRichText(ctx, tokens, maxTW, fs, fw, fontFamily);
+  const blockH = lines.length * lh;
+
+  let startY;
+  if (vAlign === 'top') startY = 220;
+  else if (vAlign === 'bottom') startY = 1220 - blockH;
+  else startY = 720 - blockH / 2;
+
+  lines.forEach((lineTokens, li) => {
+    const baseline = startY + li * lh + fs * 0.82;
+    const lineWidth = lineTokens.reduce((sum, t) => sum + t.width, 0);
+    let x;
+    if (hAlign === 'center') x = (W - lineWidth) / 2;
+    else if (hAlign === 'right') x = W - 80 - lineWidth;
+    else x = 80;
+
+    lineTokens.forEach(tok => {
+      const w = tok.bold ? 700 : fw;
+      ctx.font = getFontString(fs, w, tok.italic, fontFamily);
+      ctx.fillStyle = tok.color || tc;
+      ctx.fillText(tok.text, x, baseline);
+      if (tok.underline && !tok.isSpace) {
+        ctx.fillStyle = tok.color || tc;
+        ctx.fillRect(x, baseline + fs * 0.12, tok.width, Math.max(2, fs * 0.035));
+      }
+      x += tok.width;
+    });
+  });
+
+  // Divider
+  ctx.globalAlpha = 0.2; ctx.strokeStyle = tc; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(80, 1300); ctx.lineTo(1000, 1300); ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Handle + swipe / CTA
+  ctx.fillStyle = tc; ctx.globalAlpha = 0.85;
+  ctx.font = `500 26px ${fontFamily}`;
+  ctx.textAlign = 'left';
+  ctx.fillText(handle, 80, 1370);
+
+  if (!isCTA) {
+    ctx.textAlign = 'right';
+    ctx.fillText('swipe →', 1000, 1370);
+  } else {
+    ctx.globalAlpha = 1;
+    roundedRect(ctx, 780, 1330, 220, 58, 29);
+    ctx.fillStyle = tc; ctx.fill();
+    ctx.fillStyle = onPhoto ? '#000' : palette.from;
+    ctx.font = `600 24px ${fontFamily}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('save this →', 890, 1361);
+  }
+
+  return canvas;
+}
+
+// ─── HOOKS ───────────────────────────────────────────────────────────────────
+
+function useContainerSize() {
+  const ref = useRef(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(([e]) => setSize({ width: e.contentRect.width, height: e.contentRect.height }));
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, size];
+}
+
+// ─── RICH TEXT DISPLAY ──────────────────────────────────────────────────────
+
+function RichTextDisplay({ segments }) {
+  return (
+    <>{parseRichSegments(segments).map((s, idx) => {
+      const lines = s.text.split('\n');
+      return (
+        <span key={idx} style={{
+          fontWeight: s.bold ? 700 : 'inherit',
+          fontStyle: s.italic ? 'italic' : 'normal',
+          textDecoration: s.underline ? 'underline' : 'none',
+          textDecorationThickness: s.underline ? '0.08em' : undefined,
+          textUnderlineOffset: s.underline ? '0.12em' : undefined,
+          color: s.color || undefined,
+        }}>
+          {lines.map((line, i) => (
+            <React.Fragment key={i}>
+              {line}
+              {i < lines.length - 1 && <br />}
+            </React.Fragment>
+          ))}
+        </span>
+      );
+    })}</>
+  );
+}
+
+// ─── SLIDE PREVIEW (with inline editor) ─────────────────────────────────────
+
+function SlidePreview({
+  slide, index, palette, handle, photo, transform, photoEnabled, fontFamily,
+  fontScale = 1, vAlign = 'middle', hAlign = 'left',
+  editing, onStartEdit, onEndEdit, onSaveSegments, onConfigChange,
+  onTransformChange, onOpenPicker, onRemovePhoto, onTogglePhoto,
+  onDownload, onResetTransform,
+}) {
+  const [ref, size] = useContainerSize();
+  const [drag, setDrag] = useState(null);
+  const displayScale = size.width > 0 ? size.width / W : 0.25;
+
+  const isHook = slide.kind === 'hook';
+  const isCTA = slide.kind === 'cta';
+  const showPhoto = photo && photoEnabled;
+  const tc = showPhoto ? '#FFFFFF' : palette.text;
+  const baseFs = isHook ? 104 : isCTA ? 88 : 74;
+  const fs = baseFs * fontScale;
+  const fw = isHook ? 700 : 500;
+  const isTransformed = photo && (transform.scale !== 1 || transform.offsetX !== 0 || transform.offsetY !== 0);
+
+  // ── Editor state
+  const editorRef = useRef(null);
+  const colorInputRef = useRef(null);
+  const savedRangeRef = useRef(null);
+  const initializedRef = useRef(false);
+  const committingRef = useRef(false);
+  const [toolbarState, setToolbarState] = useState({ bold: false, italic: false, underline: false, color: null });
+  const [colorPaletteOpen, setColorPaletteOpen] = useState(false);
+  const [layoutPopupOpen, setLayoutPopupOpen] = useState(false);
+
+  // Position styles for the main text block (HTML preview)
+  const textPositionStyle = {
+    position: 'absolute', left: 80, right: 80,
+    top: vAlign === 'top' ? 220 : vAlign === 'bottom' ? undefined : '50%',
+    bottom: vAlign === 'bottom' ? 220 : undefined,
+    transform: vAlign === 'middle' ? 'translateY(-50%)' : undefined,
+    textAlign: hAlign,
+  };
+
+  // Initialize content + focus when ENTERING edit mode (one-shot per session)
+  useEffect(() => {
+    if (!editing) {
+      initializedRef.current = false;
+      committingRef.current = false;
+      setColorPaletteOpen(false);
+      return;
+    }
+    if (initializedRef.current) return;
+    if (!editorRef.current) return;
+    initializedRef.current = true;
+
+    const html = segmentsToHtml(slide.segments || [{ text: slide.text || '', bold: false, italic: false, underline: false }]);
+    editorRef.current.innerHTML = html;
+    editorRef.current.focus();
+    const range = document.createRange();
+    range.selectNodeContents(editorRef.current);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    updateToolbarState();
+    saveSelection();
+    // eslint-disable-next-line
+  }, [editing]);
+
+  function saveSelection() {
+    try {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0 && editorRef.current?.contains(sel.anchorNode)) {
+        savedRangeRef.current = sel.getRangeAt(0).cloneRange();
+      }
+    } catch {}
+  }
+  function restoreSelection() {
+    try {
+      if (!savedRangeRef.current) return;
+      editorRef.current?.focus();
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(savedRangeRef.current);
+    } catch {}
+  }
+  function updateToolbarState() {
+    if (!editing) return;
+    try {
+      const colorRaw = document.queryCommandValue('foreColor');
+      const colorHex = rgbStringToHex(colorRaw);
+      setToolbarState({
+        bold: document.queryCommandState('bold'),
+        italic: document.queryCommandState('italic'),
+        underline: document.queryCommandState('underline'),
+        color: colorHex,
+      });
+    } catch {}
+    saveSelection();
+  }
+  function applyFormat(cmd) {
+    editorRef.current?.focus();
+    document.execCommand(cmd, false, null);
+    updateToolbarState();
+  }
+  function applyColor(hex) {
+    restoreSelection();
+    if (window.getSelection()?.isCollapsed) return;
+    document.execCommand('styleWithCSS', false, true);
+    document.execCommand('foreColor', false, hex);
+    updateToolbarState();
+  }
+  function clearColor() {
+    restoreSelection();
+    if (window.getSelection()?.isCollapsed) return;
+    document.execCommand('styleWithCSS', false, true);
+    document.execCommand('foreColor', false, tc);
+    updateToolbarState();
+  }
+  function commitAndExit() {
+    if (committingRef.current) return;
+    committingRef.current = true;
+    // Capture html SYNCHRONOUSLY before any state change
+    const html = editorRef.current?.innerHTML || '';
+    const segs = htmlToSegments(html);
+    onSaveSegments(segs);
+    onEndEdit();
+  }
+  function onEditorKeyDown(e) {
+    if (e.metaKey || e.ctrlKey) {
+      if (e.key === 'b') { e.preventDefault(); applyFormat('bold'); return; }
+      if (e.key === 'i') { e.preventDefault(); applyFormat('italic'); return; }
+      if (e.key === 'u') { e.preventDefault(); applyFormat('underline'); return; }
+      if (e.key === 'Enter') { e.preventDefault(); commitAndExit(); return; }
+    }
+    if (e.key === 'Escape') { e.preventDefault(); commitAndExit(); }
+  }
+  function onEditorBlur(e) {
+    if (committingRef.current) return;
+    const next = e.relatedTarget;
+    if (next?.closest?.('[data-edit-toolbar]')) return;
+    setTimeout(() => {
+      if (committingRef.current) return;
+      if (document.activeElement === editorRef.current) return;
+      if (document.activeElement?.closest?.('[data-edit-toolbar]')) return;
+      commitAndExit();
+    }, 80);
+  }
+
+  // ── Photo panning (disabled during edit)
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !showPhoto || editing) return;
+    const onWheel = (e) => {
+      e.preventDefault();
+      const factor = e.deltaY > 0 ? 0.94 : 1.064;
+      onTransformChange({ ...transform, scale: Math.max(1, Math.min(5, transform.scale * factor)) });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [transform, showPhoto, onTransformChange, ref, editing]);
+
+  const onPD = (e) => {
+    if (editing) return;
+    if (!showPhoto) return;
+    if (e.target.closest('[data-ctrl]') || e.target.closest('[data-edit-toolbar]')) return;
+    try { ref.current?.setPointerCapture(e.pointerId); } catch {}
+    const rect = ref.current.getBoundingClientRect();
+    setDrag({ sx: e.clientX, sy: e.clientY, ox: transform.offsetX, oy: transform.offsetY, sf: W / rect.width });
+  };
+  const onPM = (e) => {
+    if (!drag) return;
+    const dx = (e.clientX - drag.sx) * drag.sf;
+    const dy = (e.clientY - drag.sy) * drag.sf;
+    onTransformChange({ ...transform, offsetX: drag.ox + dx, offsetY: drag.oy + dy });
+  };
+  const onPU = () => setDrag(null);
+
+  const ctrlBtn = {
+    width: 28, height: 28, borderRadius: 14, background: 'rgba(0,0,0,0.55)',
+    color: '#FFF', border: '0.5px solid rgba(255,255,255,0.18)', cursor: 'pointer',
+    fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    backdropFilter: 'blur(20px) saturate(180%)', WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+    transition: 'all 150ms cubic-bezier(0.2,0.9,0.3,1)', pointerEvents: 'auto',
+  };
+
+  return (
+    <div
+      ref={ref}
+      onDoubleClick={(e) => {
+        if (editing) return;
+        if (e.target.closest('[data-ctrl]')) return;
+        onStartEdit();
+      }}
+      style={{
+        width: '100%', aspectRatio: '3 / 4', position: 'relative',
+        overflow: 'hidden',
+        borderRadius: 14, background: '#111',
+        cursor: editing ? 'text' : (showPhoto ? (drag ? 'grabbing' : 'grab') : 'default'),
+        touchAction: 'none', userSelect: editing ? 'text' : 'none',
+        boxShadow: editing ? '0 0 0 3px #0A84FF, 0 20px 50px rgba(10,132,255,0.25)' : 'none',
+        transition: 'box-shadow 200ms',
+      }}
+      onPointerDown={onPD} onPointerMove={onPM} onPointerUp={onPU} onPointerCancel={onPU}
+    >
+      {/* Scaled inner — 1080×1440 base */}
+      <div style={{ width: W, height: H, transform: `scale(${displayScale})`, transformOrigin: 'top left', position: 'absolute', top: 0, left: 0 }}>
+        {showPhoto ? (
+          <img src={photo.url} alt="" draggable={false} style={{
+            position: 'absolute', width: W, height: H, objectFit: 'cover',
+            transformOrigin: 'center center',
+            transform: `translate(${transform.offsetX}px, ${transform.offsetY}px) scale(${transform.scale})`,
+            pointerEvents: 'none', willChange: 'transform',
+          }} />
+        ) : (
+          <>
+            <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(135deg, ${palette.from} 0%, ${palette.to} 100%)` }} />
+            <div style={{ position: 'absolute', inset: 0, background: `radial-gradient(circle at 80% 15%, ${palette.from} 0%, transparent 65%)`, opacity: 0.35, mixBlendMode: 'screen' }} />
+          </>
+        )}
+        {showPhoto && <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', pointerEvents: 'none' }} />}
+
+        <div style={{ position: 'absolute', top: 94, left: 80, fontFamily, fontSize: 26, fontWeight: 500, color: tc, opacity: 0.9, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+          {String(index + 1).padStart(2, '0')}
+        </div>
+
+        {/* Main text — keys force unmount/remount so React never reuses the DOM node */}
+        {editing ? (
+          <div
+            key="editor"
+            ref={editorRef}
+            contentEditable
+            suppressContentEditableWarning
+            spellCheck={false}
+            onKeyUp={updateToolbarState}
+            onMouseUp={updateToolbarState}
+            onKeyDown={onEditorKeyDown}
+            onBlur={onEditorBlur}
+            style={{
+              ...textPositionStyle,
+              fontFamily, fontSize: fs, fontWeight: fw, color: tc,
+              lineHeight: 1.18, letterSpacing: '-0.03em', wordWrap: 'break-word',
+              outline: 'none', cursor: 'text', minHeight: fs * 1.2,
+              padding: '8px 12px', margin: '-8px -12px',
+              borderRadius: 8,
+              background: showPhoto ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.06)',
+              whiteSpace: 'pre-wrap',
+              zIndex: 4,
+            }}
+          />
+        ) : (
+          <div key="display" style={{
+            ...textPositionStyle,
+            fontFamily, fontSize: fs, fontWeight: fw, color: tc,
+            lineHeight: 1.18, letterSpacing: '-0.03em', wordWrap: 'break-word',
+            whiteSpace: 'pre-wrap',
+          }}>
+            <RichTextDisplay segments={slide.segments || [{ text: slide.text || '' }]} />
+          </div>
+        )}
+
+        <div style={{ position: 'absolute', bottom: 140, left: 80, right: 80, height: 1, background: tc, opacity: 0.2 }} />
+        <div style={{ position: 'absolute', bottom: 70, left: 80, fontFamily, fontSize: 26, fontWeight: 500, color: tc, opacity: 0.85, lineHeight: 1 }}>{handle}</div>
+        {!isCTA && (
+          <div style={{ position: 'absolute', bottom: 70, right: 80, fontFamily, fontSize: 26, fontWeight: 500, color: tc, opacity: 0.85, lineHeight: 1 }}>swipe →</div>
+        )}
+        {isCTA && (
+          <div style={{
+            position: 'absolute', bottom: 52, right: 80, width: 220, height: 58, borderRadius: 29,
+            background: tc, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontFamily, fontSize: 24, fontWeight: 600,
+            color: showPhoto ? '#000' : palette.from,
+          }}>save this →</div>
+        )}
+      </div>
+
+      {/* ─── Toolbar (INSIDE slide, top center, full size — sibling of scaled div, not scaled) ─── */}
+      {editing && (
+        <div data-edit-toolbar className="fade" style={{
+          position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 20,
+          display: 'flex', gap: 3, padding: 4,
+          background: 'rgba(29,29,31,0.96)', borderRadius: 11,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.4), 0 0 0 0.5px rgba(255,255,255,0.08)',
+          backdropFilter: 'blur(24px) saturate(180%)', WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+          whiteSpace: 'nowrap',
+        }}>
+          {[
+            { k: 'bold', cmd: 'bold', label: 'B', fw: 700, hint: '⌘B' },
+            { k: 'italic', cmd: 'italic', label: 'I', fs: true, hint: '⌘I' },
+            { k: 'underline', cmd: 'underline', label: 'U', ul: true, hint: '⌘U' },
+          ].map(f => {
+            const active = toolbarState[f.k];
+            return (
+              <button
+                key={f.k}
+                data-edit-toolbar
+                onMouseDown={(e) => { e.preventDefault(); applyFormat(f.cmd); }}
+                title={f.hint}
+                style={{
+                  width: 32, height: 32, borderRadius: 8, cursor: 'pointer',
+                  background: active ? '#FFFFFF' : 'transparent',
+                  color: active ? '#1D1D1F' : '#FFFFFF',
+                  border: 'none', fontSize: 15, fontWeight: f.fw || 500,
+                  fontStyle: f.fs ? 'italic' : 'normal',
+                  textDecoration: f.ul ? 'underline' : 'none',
+                  transition: 'all 120ms',
+                }}>{f.label}</button>
+            );
+          })}
+
+          <div style={{ width: 0.5, background: 'rgba(255,255,255,0.2)', margin: '4px 2px' }} />
+
+          <div style={{ position: 'relative' }} data-edit-toolbar>
+            <button
+              data-edit-toolbar
+              onMouseDown={(e) => { e.preventDefault(); saveSelection(); setColorPaletteOpen(o => !o); }}
+              title="Text color"
+              style={{
+                width: 32, height: 32, borderRadius: 8, cursor: 'pointer',
+                background: colorPaletteOpen ? 'rgba(255,255,255,0.15)' : 'transparent',
+                border: 'none', padding: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                <span style={{ color: '#FFF', fontSize: 13, fontWeight: 600, lineHeight: 1 }}>A</span>
+                <div style={{
+                  width: 18, height: 4, borderRadius: 1,
+                  background: toolbarState.color || tc,
+                  border: '0.5px solid rgba(255,255,255,0.3)',
+                }} />
+              </div>
+            </button>
+            {colorPaletteOpen && (
+              <div data-edit-toolbar className="fade" style={{
+                position: 'absolute', top: 38, left: '50%', transform: 'translateX(-50%)', zIndex: 21,
+                padding: 8, borderRadius: 10,
+                background: 'rgba(40,40,42,0.97)',
+                backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)',
+                boxShadow: '0 12px 30px rgba(0,0,0,0.45)',
+                display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 5,
+                width: 198,
+              }}
+              onMouseDown={e => e.preventDefault()}>
+                {QUICK_COLORS.map(c => (
+                  <button
+                    key={c}
+                    data-edit-toolbar
+                    onMouseDown={(e) => { e.preventDefault(); applyColor(c); setColorPaletteOpen(false); }}
+                    title={c}
+                    style={{
+                      width: 26, height: 26, borderRadius: 6, cursor: 'pointer',
+                      background: c, border: '0.5px solid rgba(255,255,255,0.15)',
+                      boxShadow: toolbarState.color === c ? '0 0 0 2px #0A84FF' : 'none',
+                      padding: 0,
+                    }}
+                  />
+                ))}
+                <button
+                  data-edit-toolbar
+                  onMouseDown={(e) => { e.preventDefault(); colorInputRef.current?.click(); }}
+                  title="Custom color"
+                  style={{
+                    width: 26, height: 26, borderRadius: 6, cursor: 'pointer',
+                    background: 'conic-gradient(from 0deg, red, orange, yellow, green, cyan, blue, magenta, red)',
+                    border: '0.5px solid rgba(255,255,255,0.3)', padding: 0,
+                  }}
+                />
+                <button
+                  data-edit-toolbar
+                  onMouseDown={(e) => { e.preventDefault(); clearColor(); setColorPaletteOpen(false); }}
+                  title="Reset color"
+                  style={{
+                    width: 26, height: 26, borderRadius: 6, cursor: 'pointer',
+                    background: 'transparent', color: '#FFF',
+                    border: '0.5px dashed rgba(255,255,255,0.4)', fontSize: 12,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >×</button>
+                <input
+                  ref={colorInputRef} type="color"
+                  onChange={e => { applyColor(e.target.value.toUpperCase()); setColorPaletteOpen(false); }}
+                  style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 0, height: 0 }}
+                />
+              </div>
+            )}
+          </div>
+
+          <div style={{ width: 0.5, background: 'rgba(255,255,255,0.2)', margin: '4px 2px' }} />
+
+          {/* Font size */}
+          <button
+            data-edit-toolbar
+            onMouseDown={(e) => { e.preventDefault(); onConfigChange?.({ fontScale: Math.max(0.5, +(fontScale - 0.1).toFixed(2)) }); }}
+            disabled={fontScale <= 0.5}
+            title="Decrease size"
+            style={{
+              width: 30, height: 32, borderRadius: 8, cursor: fontScale <= 0.5 ? 'not-allowed' : 'pointer',
+              background: 'transparent', color: '#FFF',
+              border: 'none', fontSize: 11, fontWeight: 600, opacity: fontScale <= 0.5 ? 0.4 : 1,
+            }}>A−</button>
+          <div data-edit-toolbar style={{
+            minWidth: 36, height: 32, padding: '0 6px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#FFF', fontSize: 11, fontFamily: MONO_STACK,
+            fontVariantNumeric: 'tabular-nums', opacity: 0.85,
+          }}>{Math.round(fontScale * 100)}%</div>
+          <button
+            data-edit-toolbar
+            onMouseDown={(e) => { e.preventDefault(); onConfigChange?.({ fontScale: Math.min(2, +(fontScale + 0.1).toFixed(2)) }); }}
+            disabled={fontScale >= 2}
+            title="Increase size"
+            style={{
+              width: 30, height: 32, borderRadius: 8, cursor: fontScale >= 2 ? 'not-allowed' : 'pointer',
+              background: 'transparent', color: '#FFF',
+              border: 'none', fontSize: 14, fontWeight: 600, opacity: fontScale >= 2 ? 0.4 : 1,
+            }}>A+</button>
+
+          <div style={{ width: 0.5, background: 'rgba(255,255,255,0.2)', margin: '4px 2px' }} />
+
+          {/* Horizontal alignment — 3 buttons */}
+          {['left', 'center', 'right'].map(h => {
+            const active = hAlign === h;
+            return (
+              <button
+                key={h}
+                data-edit-toolbar
+                onMouseDown={(e) => { e.preventDefault(); onConfigChange?.({ hAlign: h }); }}
+                title={`Align ${h}`}
+                style={{
+                  width: 32, height: 32, borderRadius: 8, cursor: 'pointer',
+                  background: active ? '#FFFFFF' : 'transparent',
+                  border: 'none', padding: '0 7px',
+                  display: 'flex', flexDirection: 'column',
+                  justifyContent: 'center',
+                  alignItems: h === 'left' ? 'flex-start' : h === 'right' ? 'flex-end' : 'center',
+                  gap: 2.5,
+                  transition: 'all 120ms',
+                }}>
+                <div style={{ width: 14, height: 1.5, background: active ? '#0A84FF' : '#FFF', borderRadius: 0.5 }} />
+                <div style={{ width: 10, height: 1.5, background: active ? '#0A84FF' : '#FFF', borderRadius: 0.5 }} />
+                <div style={{ width: 16, height: 1.5, background: active ? '#0A84FF' : '#FFF', borderRadius: 0.5 }} />
+              </button>
+            );
+          })}
+
+          <div style={{ width: 0.5, background: 'rgba(255,255,255,0.2)', margin: '4px 2px' }} />
+          <button
+            data-edit-toolbar
+            onMouseDown={(e) => { e.preventDefault(); commitAndExit(); }}
+            style={{ padding: '0 14px', height: 32, borderRadius: 8, cursor: 'pointer', background: '#0A84FF', color: '#FFF', border: 'none', fontSize: 13, fontWeight: 600 }}>
+            Done
+          </button>
+        </div>
+      )}
+
+      {/* Edit hint at bottom */}
+      {editing && (
+        <div style={{ position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 20, fontFamily: MONO_STACK, fontSize: 10, letterSpacing: 0.3, padding: '4px 10px', background: 'rgba(10,132,255,0.92)', color: '#FFF', borderRadius: 10, pointerEvents: 'none', whiteSpace: 'nowrap', backdropFilter: 'blur(12px)' }}>
+          select text → format · Enter = new line · Esc = done
+        </div>
+      )}
+
+      {/* Control buttons (when not editing) */}
+      {!editing && (
+        <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, zIndex: 3 }}>
+          <button data-ctrl onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onStartEdit(); }} style={ctrlBtn} title="Edit text (or double-click slide)">✎</button>
+          {photo && (
+            <button data-ctrl onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onTogglePhoto(); }}
+              style={{ ...ctrlBtn, background: photoEnabled ? 'rgba(10,132,255,0.85)' : 'rgba(0,0,0,0.55)' }}
+              title={photoEnabled ? 'Hide photo' : 'Show photo'}
+            >{photoEnabled ? '◑' : '○'}</button>
+          )}
+          <button data-ctrl onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onOpenPicker(); }} style={ctrlBtn} title={photo ? 'Swap photo' : 'Add photo'}>{photo ? '⇄' : '+'}</button>
+          {photo && <button data-ctrl onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onRemovePhoto(); }} style={ctrlBtn} title="Remove photo">×</button>}
+          {isTransformed && <button data-ctrl onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onResetTransform(); }} style={ctrlBtn} title="Reset">↺</button>}
+          <button data-ctrl onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDownload(); }} style={ctrlBtn} title="Download PNG">↓</button>
+        </div>
+      )}
+
+      {showPhoto && !isTransformed && !editing && (
+        <div style={{ position: 'absolute', bottom: 8, left: 8, zIndex: 3, fontFamily: MONO_STACK, fontSize: 9, letterSpacing: 0.3, padding: '4px 8px', background: 'rgba(0,0,0,0.55)', color: '#FFF', borderRadius: 6, pointerEvents: 'none', backdropFilter: 'blur(12px)' }}>drag · scroll to zoom · 2× click to edit</div>
+      )}
+      {isTransformed && !editing && (
+        <div style={{ position: 'absolute', bottom: 8, left: 8, zIndex: 3, fontFamily: MONO_STACK, fontSize: 9, letterSpacing: 0.3, padding: '4px 8px', background: 'rgba(10,132,255,0.85)', color: '#FFF', borderRadius: 6, pointerEvents: 'none', backdropFilter: 'blur(12px)' }}>{(transform.scale * 100).toFixed(0)}%</div>
+      )}
+    </div>
+  );
+}
+
+// ─── FONT DROPDOWN ───────────────────────────────────────────────────────────
+
+function FontDropdown({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const btnRef = useRef(null);
+  const listRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e) {
+      if (!btnRef.current?.contains(e.target) && !listRef.current?.contains(e.target)) setOpen(false);
+    }
+    function onKey(e) { if (e.key === 'Escape') setOpen(false); }
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onClick); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  const selected = FONTS.find(f => f.id === value) || FONTS[0];
+  const filtered = useMemo(() => {
+    if (!query) return FONTS;
+    const q = query.toLowerCase();
+    return FONTS.filter(f => f.name.toLowerCase().includes(q));
+  }, [query]);
+
+  const grouped = useMemo(() => {
+    const g = {};
+    filtered.forEach(f => { if (!g[f.group]) g[f.group] = []; g[f.group].push(f); });
+    return g;
+  }, [filtered]);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button ref={btnRef} onClick={() => setOpen(!open)} className="hbtn"
+        style={{
+          width: '100%', padding: '10px 12px', borderRadius: 10,
+          background: '#FFFFFF', border: `0.5px solid ${open ? '#0A84FF' : '#D2D2D7'}`,
+          boxShadow: open ? '0 0 0 3px rgba(10,132,255,0.15)' : 'none',
+          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+        }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+          <span style={{ fontFamily: selected.family, fontSize: 20, fontWeight: 600, color: '#1D1D1F', lineHeight: 1, flexShrink: 0 }}>Aa</span>
+          <span style={{ fontSize: 13, fontWeight: 500, color: '#1D1D1F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selected.name}</span>
+        </span>
+        <span style={{ color: '#86868B', fontSize: 10, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }}>▾</span>
+      </button>
+
+      {open && (
+        <div ref={listRef} className="fade" style={{
+          position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 30,
+          background: 'rgba(255,255,255,0.98)', borderRadius: 14,
+          boxShadow: '0 20px 50px rgba(0,0,0,0.2), 0 0 0 0.5px rgba(0,0,0,0.08)',
+          backdropFilter: 'blur(24px) saturate(180%)', WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+          maxHeight: 420, overflow: 'hidden', display: 'flex', flexDirection: 'column',
+        }}>
+          <div style={{ padding: 8, borderBottom: '0.5px solid #E5E5EA' }}>
+            <input
+              autoFocus value={query} onChange={e => setQuery(e.target.value)}
+              placeholder="Search fonts…"
+              style={{ width: '100%', padding: '8px 10px', fontSize: 13, border: '0.5px solid #D2D2D7', borderRadius: 8, background: '#F5F5F7', outline: 'none' }}
+            />
+          </div>
+          <div style={{ overflow: 'auto', flex: 1 }}>
+            {Object.entries(grouped).map(([group, fonts]) => (
+              <div key={group}>
+                <div style={{ padding: '8px 12px 4px', fontSize: 10, fontWeight: 600, color: '#86868B', textTransform: 'uppercase', letterSpacing: 0.5, fontFamily: MONO_STACK, position: 'sticky', top: 0, background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(12px)' }}>
+                  {GROUP_LABELS[group] || group}
+                </div>
+                {fonts.map(f => (
+                  <button
+                    key={f.id}
+                    onClick={() => { onChange(f.id); setOpen(false); setQuery(''); }}
+                    style={{
+                      width: '100%', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 10,
+                      background: f.id === value ? 'rgba(10,132,255,0.1)' : 'transparent',
+                      border: 'none', cursor: 'pointer', textAlign: 'left',
+                      transition: 'background 100ms',
+                    }}
+                    onMouseEnter={e => { if (f.id !== value) e.currentTarget.style.background = '#F5F5F7'; }}
+                    onMouseLeave={e => { if (f.id !== value) e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <span style={{ fontFamily: f.family, fontSize: 18, fontWeight: 600, color: '#1D1D1F', width: 40, lineHeight: 1 }}>Aa</span>
+                    <span style={{ fontFamily: f.family, fontSize: 13, color: '#1D1D1F', flex: 1 }}>{f.name}</span>
+                    {f.id === value && <span style={{ color: '#0A84FF', fontSize: 13 }}>✓</span>}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {Object.keys(grouped).length === 0 && (
+              <div style={{ padding: 20, textAlign: 'center', color: '#86868B', fontSize: 13 }}>No fonts found</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PHOTO PICKER MODAL ──────────────────────────────────────────────────────
+
+function PhotoPicker({ slideIndex, photos, onClose, onPick, onUpload }) {
+  const fileRef = useRef(null);
+  useEffect(() => {
+    const k = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [onClose]);
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, backdropFilter: 'blur(24px) saturate(180%)', WebkitBackdropFilter: 'blur(24px) saturate(180%)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'rgba(255,255,255,0.98)', borderRadius: 20, width: '100%', maxWidth: 640, maxHeight: '85vh', overflow: 'auto', padding: 24, boxShadow: '0 40px 100px rgba(0,0,0,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 10, letterSpacing: 1.5, textTransform: 'uppercase', color: '#86868B', fontFamily: MONO_STACK }}>pick photo</div>
+            <div style={{ fontSize: 20, fontWeight: 600, marginTop: 3, letterSpacing: '-0.02em' }}>Slide {slideIndex + 1}</div>
+          </div>
+          <button onClick={onClose} style={{ width: 30, height: 30, borderRadius: 15, background: '#F2F2F7', border: 'none', cursor: 'pointer', fontSize: 15, color: '#86868B' }}>×</button>
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" multiple onChange={e => { onUpload(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
+        <button onClick={() => fileRef.current?.click()} style={{ width: '100%', padding: 14, marginBottom: 14, border: '1px dashed #D2D2D7', borderRadius: 12, background: '#FAFAFA', cursor: 'pointer', fontSize: 13, fontWeight: 500, color: '#1D1D1F' }}>+ Upload photos</button>
+        {photos.length === 0 ? (
+          <div style={{ padding: 40, textAlign: 'center', color: '#86868B', fontSize: 14, background: '#F5F5F7', borderRadius: 12 }}>No photos yet</div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 6 }}>
+            {photos.map(p => (
+              <div key={p.id} onClick={() => { onPick(p.id); onClose(); }} style={{ aspectRatio: '3/4', borderRadius: 10, overflow: 'hidden', background: `url(${p.url}) center/cover`, cursor: 'pointer', border: '0.5px solid #E5E5EA', transition: 'transform 150ms' }}
+                onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.04)'} onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── PHOTO CATALOG ───────────────────────────────────────────────────────────
+
+function PhotoCatalog({ photos, onReorder, onDelete, onUpload }) {
+  const fileRef = useRef(null);
+  const [dragging, setDragging] = useState(null);
+  const [over, setOver] = useState(null);
+  function onDragStart(e, i) { setDragging(i); e.dataTransfer.effectAllowed = 'move'; }
+  function onDragOver(e, i) { e.preventDefault(); setOver(i); }
+  function onDrop(e, i) {
+    e.preventDefault();
+    if (dragging === null || dragging === i) { setDragging(null); setOver(null); return; }
+    const next = [...photos];
+    const [item] = next.splice(dragging, 1);
+    next.splice(i, 0, item);
+    onReorder(next); setDragging(null); setOver(null);
+  }
+  return (
+    <div>
+      <input ref={fileRef} type="file" accept="image/*" multiple onChange={e => { onUpload(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
+      <div
+        onClick={() => fileRef.current?.click()}
+        onDragOver={e => e.preventDefault()}
+        onDrop={e => { e.preventDefault(); onUpload(e.dataTransfer.files); }}
+        style={{ border: '1px dashed #D2D2D7', borderRadius: 12, padding: '14px 16px', textAlign: 'center', cursor: 'pointer', background: '#FFFFFF', transition: 'all 180ms' }}
+        onMouseEnter={e => { e.currentTarget.style.borderColor = '#0A84FF'; e.currentTarget.style.background = '#F5F9FF'; }}
+        onMouseLeave={e => { e.currentTarget.style.borderColor = '#D2D2D7'; e.currentTarget.style.background = '#FFFFFF'; }}
+      >
+        <div style={{ fontSize: 13, color: '#1D1D1F', fontWeight: 500 }}>{photos.length ? 'Add more photos' : 'Drop photos or click'}</div>
+        <div style={{ fontSize: 10, color: '#86868B', marginTop: 3, fontFamily: MONO_STACK }}>drag to pan · scroll to zoom</div>
+      </div>
+      {photos.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4, marginTop: 8 }}>
+          {photos.map((p, i) => (
+            <div key={p.id} draggable onDragStart={e => onDragStart(e, i)} onDragOver={e => onDragOver(e, i)} onDrop={e => onDrop(e, i)} onDragEnd={() => { setDragging(null); setOver(null); }}
+              style={{ aspectRatio: '3/4', borderRadius: 8, overflow: 'hidden', position: 'relative', cursor: 'grab', background: `url(${p.url}) center/cover`, border: `1.5px solid ${over === i ? '#0A84FF' : '#E5E5EA'}`, opacity: dragging === i ? 0.45 : 1, transition: 'opacity 150ms, border-color 150ms' }}>
+              <button onClick={e => { e.stopPropagation(); onDelete(p.id); }} style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: 8, background: 'rgba(0,0,0,0.65)', color: '#FFF', border: 'none', cursor: 'pointer', fontSize: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PALETTE SWATCH ──────────────────────────────────────────────────────────
+
+function PaletteSwatch({ palette, size = 22, selected, onClick, title }) {
+  return (
+    <button onClick={onClick} title={title} className="hbtn"
+      style={{
+        display: 'flex', padding: 0, border: `1.5px solid ${selected ? '#0A84FF' : 'transparent'}`,
+        borderRadius: 8, cursor: 'pointer', overflow: 'hidden',
+        boxShadow: selected ? '0 0 0 2px rgba(10,132,255,0.15)' : '0 1px 3px rgba(0,0,0,0.08)',
+        background: 'transparent',
+      }}>
+      {palette.slice(0, 5).map((s, i) => (
+        <div key={i} style={{ width: size, height: size, background: `linear-gradient(135deg, ${s.from}, ${s.to})` }} />
+      ))}
+    </button>
+  );
+}
+
+// ─── MAIN ─────────────────────────────────────────────────────────────────────
+
+function CarouselStudio() {
+  const [hook, setHook] = useState('');
+  const [context, setContext] = useState('');
+  const [contextOpen, setContextOpen] = useState(false);
+  const [genCtx, setGenCtx] = useState(false);
+  const [slideCount, setSlideCount] = useState(8);
+  const [slides, setSlides] = useState(null);
+  const [fontId, setFontId] = useState('helvetica');
+  const [paletteId, setPaletteId] = useState('warm');
+  const [customPalettes, setCustomPalettes] = useState({});
+  const [favoritePaletteId, setFavoritePaletteId] = useState(null);
+  const [handle, setHandle] = useState('@yourhandle');
+  const [photos, setPhotos] = useState([]);
+  const [slideConfigs, setSlideConfigs] = useState({});
+  const [drafts, setDrafts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [error, setError] = useState('');
+  const [pickerFor, setPickerFor] = useState(null);
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [draftsOpen, setDraftsOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [toast, setToast] = useState('');
+
+  const paletteColorRef = useRef(null);
+
+  const fontFamily = getFontFamily(fontId);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await storageGet('settings');
+        if (s?.value) {
+          const p = JSON.parse(s.value);
+          if (p.handle) setHandle(p.handle);
+          if (p.paletteId) setPaletteId(p.paletteId);
+          if (p.fontId) setFontId(p.fontId);
+          if (p.favoritePaletteId) setFavoritePaletteId(p.favoritePaletteId);
+        }
+      } catch {}
+      try {
+        const cp = await storageGet('customPalettes');
+        if (cp?.value) setCustomPalettes(JSON.parse(cp.value));
+      } catch {}
+      try {
+        const list = await storageList('draft:');
+        if (list?.keys?.length) {
+          const items = [];
+          for (const k of list.keys) {
+            try { const v = await storageGet(k); if (v?.value) items.push({ _key: k, ...JSON.parse(v.value) }); } catch {}
+          }
+          items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          setDrafts(items);
+        }
+      } catch {}
+    })();
+  }, []);
+
+  function showToast(msg) {
+    setToast(msg);
+    setTimeout(() => setToast(''), 2200);
+  }
+
+  async function persistSettings(next = {}) {
+    try { await storageSet('settings', JSON.stringify({ handle, paletteId, fontId, favoritePaletteId, ...next })); } catch {}
+  }
+  async function persistCustomPalettes(next) {
+    try { await storageSet('customPalettes', JSON.stringify(next)); } catch {}
+  }
+
+  const allPalettes = { ...BASE_PALETTES, ...customPalettes };
+  const palettes = allPalettes[paletteId] || BASE_PALETTES.warm;
+
+  async function generateContext() {
+    const h = hook.trim();
+    if (!h) return;
+    setGenCtx(true); setError('');
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514', max_tokens: 600,
+          messages: [{ role: 'user', content: `Hook: "${h}"\n\nWrite 5–7 punchy bullet points of supporting context for this hook. Output only bullets, no intro.` }],
+        }),
+      });
+      const data = await res.json();
+      const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+      setContext(text.trim());
+      setContextOpen(true);
+    } catch { setError('Context generation failed.'); }
+    setGenCtx(false);
+  }
+
+  async function generate() {
+    const h = hook.trim();
+    if (!h) return;
+    setLoading(true); setError('');
+    const n = slideCount;
+    const valueCount = n - 2;
+    const hasThai = /[\u0E00-\u0E7F]/.test(h);
+    const contextBlock = context.trim() ? `\n\nSupporting context:\n${context.trim()}` : '';
+    const langNote = hasThai ? ' (write in Thai / เขียนเป็นภาษาไทย)' : '';
+
+    const prompt = `You are a carousel copywriter. Your ONLY job is to output a JSON object. No refusal, no commentary, no markdown — just valid JSON.
+
+Topic: "${h}"${contextBlock}
+
+Write ${n} slides${langNote}. Each slide.text ≤ 12 words. No emoji. No hashtags. Concrete and specific.
+- Slide 1 kind="hook": the sharpest version of the hook
+- Slides 2 to ${n - 1} kind="value": ${valueCount} distinct concrete insights or steps
+- Slide ${n} kind="cta": invites to save, share, or follow
+
+Respond with ONLY this JSON shape (no wrapping, no code fences):
+{"slides":[{"text":"...","kind":"hook"}${',{"text":"...","kind":"value"}'.repeat(valueCount)},{"text":"...","kind":"cta"}]}`;
+
+    async function attempt(retryCount = 0) {
+      try {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const raw = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+
+        let jsonText = raw.replace(/```json\s*|```\s*/g, '').trim();
+        const a = jsonText.indexOf('{'), b = jsonText.lastIndexOf('}');
+        if (a === -1 || b === -1 || b < a) {
+          if (retryCount < 1) return attempt(retryCount + 1);
+          const snippet = raw.slice(0, 160).replace(/\s+/g, ' ');
+          throw new Error(`The AI didn't return JSON. It said: "${snippet}…" — Try rewording your hook.`);
+        }
+        jsonText = jsonText.slice(a, b + 1);
+        let parsed;
+        try { parsed = JSON.parse(jsonText); }
+        catch {
+          const cleaned = jsonText.replace(/,(\s*[}\]])/g, '$1');
+          try { parsed = JSON.parse(cleaned); }
+          catch { throw new Error(`Couldn't parse response. Try again.`); }
+        }
+        if (!Array.isArray(parsed.slides) || parsed.slides.length < 2) throw new Error(`Got ${parsed.slides?.length || 0} slides, expected ${n}.`);
+        let slidesArr = parsed.slides.slice(0, n);
+        while (slidesArr.length < n) slidesArr.push({ text: '...', kind: slidesArr.length === n - 1 ? 'cta' : 'value' });
+        const slidesWithSegs = slidesArr.map((s, i) => ({
+          kind: s.kind || (i === 0 ? 'hook' : i === n - 1 ? 'cta' : 'value'),
+          text: s.text || '',
+          segments: [{ text: s.text || '', bold: false, italic: false, underline: false }],
+        }));
+        setSlides(slidesWithSegs);
+      } catch (e) {
+        setError(e.message || 'Generation failed.');
+      }
+    }
+
+    await attempt(0);
+    setLoading(false);
+  }
+
+  async function onUploadPhotos(fileList) {
+    const files = Array.from(fileList || []);
+    const next = [];
+    for (const f of files) {
+      if (!f.type.startsWith('image/')) continue;
+      try { next.push({ id: uid(), url: await fileToDataUri(f, 1440) }); }
+      catch { setError('Failed to read: ' + f.name); }
+    }
+    if (next.length) setPhotos(prev => [...prev, ...next]);
+  }
+
+  function deletePhoto(photoId) {
+    setPhotos(prev => prev.filter(p => p.id !== photoId));
+    setSlideConfigs(prev => {
+      const next = { ...prev };
+      Object.keys(next).forEach(k => { if (next[k].photoId === photoId) next[k] = { ...next[k], photoId: null }; });
+      return next;
+    });
+  }
+
+  function getConfig(i) { return slideConfigs[i] || { photoId: null, transform: { ...DEFAULT_TRANSFORM }, photoEnabled: true }; }
+  function setConfig(i, updater) {
+    setSlideConfigs(prev => {
+      const cur = prev[i] || { photoId: null, transform: { ...DEFAULT_TRANSFORM }, photoEnabled: true };
+      const next = typeof updater === 'function' ? updater(cur) : updater;
+      return { ...prev, [i]: next };
+    });
+  }
+  function assignPhoto(i, photoId) { setConfig(i, cur => ({ ...cur, photoId, transform: { ...DEFAULT_TRANSFORM }, photoEnabled: true })); }
+  function removePhoto(i) { setConfig(i, cur => ({ ...cur, photoId: null, transform: { ...DEFAULT_TRANSFORM } })); }
+  function resetTransform(i) { setConfig(i, cur => ({ ...cur, transform: { ...DEFAULT_TRANSFORM } })); }
+  function updateTransform(i, t) { setConfig(i, cur => ({ ...cur, transform: t })); }
+  function togglePhoto(i) { setConfig(i, cur => ({ ...cur, photoEnabled: !cur.photoEnabled })); }
+
+  function autoAssignPhotos() {
+    if (!slides || !photos.length) return;
+    const next = {};
+    slides.forEach((_, i) => { next[i] = { photoId: photos[i % photos.length].id, transform: { ...DEFAULT_TRANSFORM }, photoEnabled: true }; });
+    setSlideConfigs(next);
+  }
+  function alternatePhotos() {
+    if (!slides || !photos.length) return;
+    const next = {};
+    slides.forEach((_, i) => { next[i] = { photoId: photos[i % photos.length].id, transform: { ...DEFAULT_TRANSFORM }, photoEnabled: i % 2 === 0 }; });
+    setSlideConfigs(next);
+  }
+  function clearAllPhotos() { setSlideConfigs({}); }
+
+  function updateSlideSegments(i, segments) {
+    setSlides(prev => prev.map((s, idx) => idx === i ? { ...s, segments, text: segmentsToPlain(segments) } : s));
+  }
+
+  async function downloadSlide(i) {
+    if (!slides) return;
+    try {
+      const cfg = getConfig(i);
+      const photo = cfg.photoId ? photos.find(p => p.id === cfg.photoId) : null;
+      const showPhoto = photo && cfg.photoEnabled;
+      const palette = palettes[i % palettes.length];
+      const layoutOpts = { fontScale: cfg.fontScale ?? 1, vAlign: cfg.vAlign || 'middle', hAlign: cfg.hAlign || 'left' };
+      const canvas = await renderSlide(slides[i], i, palette, handle, showPhoto ? photo.url : null, cfg.transform, fontFamily, layoutOpts);
+      await new Promise((resolve, reject) => {
+        canvas.toBlob(blob => {
+          if (!blob) { reject(new Error('blob failed')); return; }
+          triggerDownload(blob, `slide-${String(i + 1).padStart(2, '0')}.png`);
+          resolve();
+        }, 'image/png');
+      });
+    } catch (e) { setError('Export failed: ' + (e.message || String(e))); }
+  }
+
+  async function downloadAllAsZip() {
+    if (!slides || downloading) return;
+    setDownloading(true); setDownloadProgress(0); setError('');
+    try {
+      const files = [];
+      for (let i = 0; i < slides.length; i++) {
+        setDownloadProgress(i + 1);
+        const cfg = getConfig(i);
+        const photo = cfg.photoId ? photos.find(p => p.id === cfg.photoId) : null;
+        const showPhoto = photo && cfg.photoEnabled;
+        const palette = palettes[i % palettes.length];
+        const layoutOpts = { fontScale: cfg.fontScale ?? 1, vAlign: cfg.vAlign || 'middle', hAlign: cfg.hAlign || 'left' };
+        const canvas = await renderSlide(slides[i], i, palette, handle, showPhoto ? photo.url : null, cfg.transform, fontFamily, layoutOpts);
+        const bytes = await canvasToUint8(canvas);
+        files.push({ name: `slide-${String(i + 1).padStart(2, '0')}.png`, data: bytes });
+        await new Promise(r => setTimeout(r, 10));
+      }
+      const zipBlob = createZip(files);
+      const slug = (hook || 'carousel').replace(/[^a-z0-9ก-๙]+/gi, '-').slice(0, 40).toLowerCase() || 'carousel';
+      triggerDownload(zipBlob, `${slug}.zip`);
+      showToast(`Exported ${slides.length} slides as ZIP`);
+    } catch (e) {
+      setError('ZIP export failed: ' + (e.message || String(e)));
+    }
+    setDownloading(false); setDownloadProgress(0);
+  }
+
+  async function saveDraft() {
+    if (!slides) return;
+    const id = Date.now().toString(36);
+    const key = `draft:${id}`;
+    const draft = { id, hook, context, slides, paletteId, fontId, slideCount, createdAt: Date.now() };
+    const value = JSON.stringify(draft);
+    try {
+      if (typeof storageSet !== 'function') throw new Error('persistent storage unavailable');
+      const result = await storageSet(key, value);
+      if (!result) throw new Error('storage returned empty');
+      setDrafts(prev => [{ _key: key, ...draft }, ...prev]);
+      showToast('✓ Draft saved');
+    } catch (e) {
+      setDrafts(prev => [{ _key: key, _memory: true, ...draft }, ...prev]);
+      showToast('Saved to memory only');
+    }
+  }
+
+  async function deleteDraft(key) {
+    try { await storageDel(key); setDrafts(prev => prev.filter(d => d._key !== key)); } catch {}
+  }
+
+  function loadDraft(d) {
+    setHook(d.hook || '');
+    setContext(d.context || '');
+    setSlides(d.slides);
+    if (d.paletteId) setPaletteId(d.paletteId);
+    if (d.fontId) setFontId(d.fontId);
+    if (d.slideCount) setSlideCount(d.slideCount);
+    setSlideConfigs({});
+    setDraftsOpen(false);
+  }
+
+  async function copyAllText() {
+    if (!slides) return;
+    try {
+      await navigator.clipboard.writeText(slides.map((s, i) => `${i + 1}. ${segmentsToPlain(s.segments || s.text)}`).join('\n'));
+      setCopied(true); setTimeout(() => setCopied(false), 1400);
+    } catch {}
+  }
+
+  function addRandomPalette() {
+    const id = 'custom_' + uid();
+    const next = { ...customPalettes, [id]: generateRandomPalette() };
+    setCustomPalettes(next); persistCustomPalettes(next);
+    setPaletteId(id);
+  }
+  function addPaletteFromColor(hex) {
+    const id = 'custom_' + uid();
+    const next = { ...customPalettes, [id]: paletteFromColor(hex) };
+    setCustomPalettes(next); persistCustomPalettes(next);
+    setPaletteId(id);
+    showToast(`✓ Palette generated from ${hex}`);
+  }
+  function randomizeCurrent() {
+    if (paletteId.startsWith('custom_')) {
+      const next = { ...customPalettes, [paletteId]: generateRandomPalette() };
+      setCustomPalettes(next); persistCustomPalettes(next);
+    } else addRandomPalette();
+  }
+  function saveCurrentAsFavorite() {
+    setFavoritePaletteId(paletteId);
+    persistSettings({ favoritePaletteId: paletteId });
+    showToast('Saved as favorite');
+  }
+  function deleteCustomPalette(id) {
+    if (!id.startsWith('custom_')) return;
+    const next = { ...customPalettes };
+    delete next[id];
+    setCustomPalettes(next); persistCustomPalettes(next);
+    if (paletteId === id) setPaletteId('warm');
+    if (favoritePaletteId === id) { setFavoritePaletteId(null); persistSettings({ favoritePaletteId: null }); }
+  }
+
+  const hasAnyPhoto = Object.values(slideConfigs).some(c => c?.photoId);
+
+  return (
+    <div style={{
+      minHeight: '100vh', background: '#F5F5F7', color: '#1D1D1F',
+      fontFamily,
+      WebkitFontSmoothing: 'antialiased', MozOsxFontSmoothing: 'grayscale',
+    }}>
+      <style>{`
+        @import url('${GF_URL_THAI}');
+        @import url('${GF_URL_ENG_SANS}');
+        @import url('${GF_URL_ENG_SERIF}');
+        * { box-sizing: border-box; }
+        body { margin: 0; -webkit-font-smoothing: antialiased; }
+        textarea, input, button { font-family: inherit; }
+        textarea:focus, input:focus { outline: none; border-color: #0A84FF !important; box-shadow: 0 0 0 3px rgba(10,132,255,0.15); }
+
+        .spin { animation: spin 0.9s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .fade { animation: fadeUp 220ms ease; }
+        @keyframes fadeUp { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+        .slide-in { animation: sIn 320ms cubic-bezier(0.2,0.9,0.3,1) both; }
+        @keyframes sIn { from { opacity:0; transform:translateY(10px) scale(0.97); } to { opacity:1; transform:none; } }
+
+        .hbtn { transition: transform 120ms cubic-bezier(0.2,0.9,0.3,1), background 150ms, color 150ms, border-color 150ms, box-shadow 150ms, opacity 150ms; }
+        .hbtn:hover:not(:disabled) { transform: translateY(-0.5px); }
+        .hbtn:active:not(:disabled) { transform: scale(0.97); }
+        .hbtn:disabled { opacity: 0.4; cursor: not-allowed !important; }
+
+        .chip { padding: 7px 14px; font-size: 12px; font-weight: 500; border-radius: 999px; cursor: pointer; border: 0.5px solid #D2D2D7; background: #FFFFFF; color: #1D1D1F; }
+        .chip:hover { background: #F5F5F7; }
+        .chip.active { background: #1D1D1F; color: #FFFFFF; border-color: #1D1D1F; }
+
+        .ghost-btn { padding: 6px 12px; font-size: 11px; font-weight: 500; border-radius: 999px; cursor: pointer; border: 0.5px solid #D2D2D7; background: transparent; color: #1D1D1F; }
+        .ghost-btn:hover { background: #F2F2F7; }
+
+        .apple-input { width: 100%; padding: 10px 12px; font-size: 14px; border: 0.5px solid #D2D2D7; border-radius: 10px; background: #FFFFFF; color: #1D1D1F; transition: border-color 150ms, box-shadow 150ms; }
+
+        [contenteditable="true"]:focus { outline: none; }
+        [contenteditable="true"] b, [contenteditable="true"] strong { font-weight: 700; }
+        [contenteditable="true"] i, [contenteditable="true"] em { font-style: italic; }
+        [contenteditable="true"] u { text-decoration: underline; }
+
+        @media (max-width: 900px) { .mgrid { grid-template-columns: 1fr !important; } .panel { border-right: none !important; border-bottom: 0.5px solid #D2D2D7 !important; } }
+      `}</style>
+
+      {/* Header */}
+      <header style={{
+        borderBottom: '0.5px solid rgba(0,0,0,0.1)',
+        padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: 'rgba(245,245,247,0.82)', position: 'sticky', top: 0, zIndex: 20,
+        backdropFilter: 'blur(24px) saturate(180%)', WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.035em', lineHeight: 1 }}>
+            Solo<span style={{ color: '#0A84FF' }}>Carousel</span>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={() => setDraftsOpen(!draftsOpen)} className="hbtn ghost-btn">
+            Drafts{drafts.length > 0 ? <span style={{ color: '#0A84FF', marginLeft: 5, fontVariantNumeric: 'tabular-nums' }}>{drafts.length}</span> : null}
+          </button>
+          <button disabled={!slides || downloading} onClick={downloadAllAsZip} className="hbtn"
+            style={{
+              padding: '8px 16px', fontSize: 13, fontWeight: 600,
+              background: !slides || downloading ? '#D2D2D7' : '#0A84FF', color: '#FFF',
+              border: 'none', borderRadius: 999, cursor: !slides || downloading ? 'not-allowed' : 'pointer',
+              display: 'flex', alignItems: 'center', gap: 7,
+              boxShadow: !slides || downloading ? 'none' : '0 2px 8px rgba(10,132,255,0.3)',
+            }}>
+            {downloading ? (
+              <><span className="spin" style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid #FFF', borderTopColor: 'transparent' }} />{downloadProgress}/{slides?.length}</>
+            ) : `↓  Download .zip`}
+          </button>
+        </div>
+      </header>
+
+      {/* Drafts drawer */}
+      {draftsOpen && (
+        <div className="fade" style={{ borderBottom: '0.5px solid rgba(0,0,0,0.1)', background: '#FFFFFF', padding: '16px 24px', maxHeight: 240, overflowY: 'auto' }}>
+          {drafts.length === 0 ? (
+            <div style={{ color: '#86868B', fontSize: 13 }}>No drafts yet.</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
+              {drafts.map(d => (
+                <div key={d._key} style={{ border: '0.5px solid #E5E5EA', borderRadius: 12, padding: 12, background: '#FAFAFA' }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, lineHeight: 1.3, letterSpacing: '-0.01em', marginBottom: 4 }}>{(d.hook || '').slice(0, 65)}{d.hook?.length > 65 ? '…' : ''}</div>
+                  <div style={{ fontSize: 10, color: '#86868B', fontFamily: MONO_STACK, marginBottom: 8 }}>{d.slideCount || 8} slides · {new Date(d.createdAt).toLocaleDateString()}{d._memory ? ' · memory' : ''}</div>
+                  <div style={{ display: 'flex', gap: 5 }}>
+                    <button onClick={() => loadDraft(d)} className="hbtn" style={{ flex: 1, padding: '6px 10px', fontSize: 11, fontWeight: 500, background: '#0A84FF', color: '#FFF', border: 'none', borderRadius: 999, cursor: 'pointer' }}>Load</button>
+                    <button onClick={() => deleteDraft(d._key)} className="hbtn" style={{ padding: '6px 10px', fontSize: 12, background: 'transparent', border: '0.5px solid #D2D2D7', borderRadius: 999, cursor: 'pointer' }}>×</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <main className="mgrid" style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 380px) 1fr', gap: 0 }}>
+        {/* LEFT */}
+        <aside className="panel" style={{ padding: 24, borderRight: '0.5px solid rgba(0,0,0,0.1)', minHeight: 'calc(100vh - 57px)', display: 'flex', flexDirection: 'column', gap: 22 }}>
+          {/* 01 Hook */}
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: 0.5, color: '#86868B', fontFamily: MONO_STACK, textTransform: 'uppercase', marginBottom: 8 }}>01 · hook</div>
+            <textarea
+              value={hook}
+              onChange={e => setHook(e.target.value)}
+              onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') generate(); }}
+              placeholder="One line. Hook and angle."
+              style={{ width: '100%', minHeight: 96, padding: 12, fontSize: 17, lineHeight: 1.35, fontWeight: 400, border: '0.5px solid #D2D2D7', borderRadius: 12, background: '#FFFFFF', resize: 'vertical', color: '#1D1D1F', letterSpacing: '-0.015em', fontFamily }}
+            />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 7 }}>
+              {EXAMPLE_HOOKS.map((h, i) => (
+                <button key={i} onClick={() => setHook(h)} className="hbtn" style={{ fontSize: 10, padding: '4px 10px', borderRadius: 999, background: 'transparent', color: '#86868B', border: '0.5px solid #E5E5EA', cursor: 'pointer', fontFamily }}>{h.length > 28 ? h.slice(0, 26) + '…' : h}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* 02 Context */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
+              <div style={{ fontSize: 11, letterSpacing: 0.5, color: '#86868B', fontFamily: MONO_STACK, textTransform: 'uppercase' }}>02 · context <span style={{ opacity: 0.6 }}>(optional)</span></div>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button onClick={generateContext} disabled={genCtx || !hook.trim()} className="hbtn ghost-btn" style={{ fontSize: 10, padding: '4px 10px' }}>
+                  {genCtx ? <><span className="spin" style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #D2D2D7', borderTopColor: '#0A84FF', display: 'inline-block', marginRight: 4 }} />thinking</> : '✶ AI fill'}
+                </button>
+                <button onClick={() => setContextOpen(!contextOpen)} className="hbtn ghost-btn" style={{ fontSize: 10, padding: '4px 8px' }}>{contextOpen ? '▴' : '▾'}</button>
+              </div>
+            </div>
+            {contextOpen && (
+              <textarea value={context} onChange={e => setContext(e.target.value)} placeholder="Paste data, bullets, examples…" style={{ width: '100%', minHeight: 90, padding: 12, fontSize: 13, lineHeight: 1.5, border: '0.5px solid #D2D2D7', borderRadius: 12, background: '#FFFFFF', resize: 'vertical', color: '#1D1D1F', fontFamily }} />
+            )}
+            {!contextOpen && context.trim() && (
+              <div style={{ fontSize: 11, color: '#0A84FF', fontFamily: MONO_STACK }}>✶ context added — {context.trim().split('\n').length} lines</div>
+            )}
+          </div>
+
+          {/* 03 Slide count */}
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: 0.5, color: '#86868B', fontFamily: MONO_STACK, textTransform: 'uppercase', marginBottom: 10 }}>03 · slides</div>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '10px 12px', background: '#FFFFFF',
+              border: '0.5px solid #D2D2D7', borderRadius: 14,
+            }}>
+              <button
+                onClick={() => setSlideCount(Math.max(3, slideCount - 1))}
+                disabled={slideCount <= 3}
+                className="hbtn"
+                style={{
+                  width: 38, height: 38, borderRadius: 19, background: slideCount <= 3 ? '#F5F5F7' : '#F2F2F7',
+                  color: slideCount <= 3 ? '#C7C7CC' : '#1D1D1F',
+                  border: 'none', cursor: slideCount <= 3 ? 'not-allowed' : 'pointer',
+                  fontSize: 22, fontWeight: 400, lineHeight: 1,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+              >−</button>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1 }}>
+                <div style={{ fontSize: 32, fontWeight: 600, color: '#1D1D1F', letterSpacing: '-0.03em', fontVariantNumeric: 'tabular-nums' }}>{slideCount}</div>
+                <div style={{ fontSize: 10, color: '#86868B', fontFamily: MONO_STACK, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 }}>slides</div>
+              </div>
+              <button
+                onClick={() => setSlideCount(Math.min(15, slideCount + 1))}
+                disabled={slideCount >= 15}
+                className="hbtn"
+                style={{
+                  width: 38, height: 38, borderRadius: 19, background: slideCount >= 15 ? '#F5F5F7' : '#F2F2F7',
+                  color: slideCount >= 15 ? '#C7C7CC' : '#1D1D1F',
+                  border: 'none', cursor: slideCount >= 15 ? 'not-allowed' : 'pointer',
+                  fontSize: 22, fontWeight: 400, lineHeight: 1,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+              >+</button>
+            </div>
+            <div style={{ display: 'flex', gap: 5, marginTop: 8 }}>
+              {[5, 7, 10, 12].map(n => (
+                <button key={n} onClick={() => setSlideCount(n)} className="hbtn"
+                  style={{
+                    flex: 1, padding: '7px 0', fontSize: 12, fontWeight: 500,
+                    background: slideCount === n ? '#1D1D1F' : 'transparent',
+                    color: slideCount === n ? '#FFF' : '#86868B',
+                    border: `0.5px solid ${slideCount === n ? '#1D1D1F' : '#E5E5EA'}`,
+                    borderRadius: 999, cursor: 'pointer', fontVariantNumeric: 'tabular-nums',
+                  }}>{n}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Generate */}
+          <button onClick={generate} disabled={loading || !hook.trim()} className="hbtn"
+            style={{
+              padding: '14px 18px', fontSize: 14, fontWeight: 600, letterSpacing: -0.01,
+              background: loading || !hook.trim() ? '#D2D2D7' : '#0A84FF', color: '#FFF',
+              border: 'none', borderRadius: 14, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              boxShadow: loading || !hook.trim() ? 'none' : '0 2px 8px rgba(10,132,255,0.3)',
+            }}>
+            {loading ? <><span className="spin" style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #FFF', borderTopColor: 'transparent' }} />Writing {slideCount} slides…</> : `✶  Generate ${slideCount} slides`}
+          </button>
+
+          {error && (
+            <div className="fade" style={{ fontSize: 12, color: '#D70015', padding: 12, border: '0.5px solid #FFB3B3', borderRadius: 10, background: '#FFF5F4', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ lineHeight: 1.5 }}>{error}</span>
+                <button onClick={() => setError('')} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 14, color: '#D70015', flexShrink: 0 }}>×</button>
+              </div>
+              {hook.trim() && !loading && (
+                <button onClick={generate} className="hbtn" style={{ alignSelf: 'flex-start', padding: '6px 12px', fontSize: 11, fontWeight: 500, background: '#FFFFFF', color: '#D70015', border: '0.5px solid #FFB3B3', borderRadius: 999, cursor: 'pointer' }}>↻ Retry</button>
+              )}
+            </div>
+          )}
+
+          {/* 04 Font */}
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: 0.5, color: '#86868B', fontFamily: MONO_STACK, textTransform: 'uppercase', marginBottom: 8 }}>04 · typeface</div>
+            <FontDropdown value={fontId} onChange={id => { setFontId(id); persistSettings({ fontId: id }); }} />
+            <div style={{ fontSize: 10, color: '#86868B', marginTop: 6, fontFamily: MONO_STACK }}>{FONTS.length} fonts · Thai + English</div>
+          </div>
+
+          {/* 05 Palette */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div style={{ fontSize: 11, letterSpacing: 0.5, color: '#86868B', fontFamily: MONO_STACK, textTransform: 'uppercase' }}>05 · palette</div>
+              <button onClick={saveCurrentAsFavorite} className="hbtn ghost-btn" style={{ fontSize: 10, padding: '4px 10px', color: favoritePaletteId === paletteId ? '#FF2D55' : '#1D1D1F' }} title="Save as favorite">
+                {favoritePaletteId === paletteId ? '★ Favorite' : '☆ Favorite'}
+              </button>
+            </div>
+
+            {/* Built-in palettes */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+              {Object.keys(BASE_PALETTES).map(t => (
+                <div key={t} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                  <PaletteSwatch palette={BASE_PALETTES[t]} size={18} selected={paletteId === t} onClick={() => { setPaletteId(t); persistSettings({ paletteId: t }); }} title={t} />
+                  <div style={{ fontSize: 9, color: paletteId === t ? '#0A84FF' : '#86868B', fontWeight: paletteId === t ? 600 : 400, textTransform: 'capitalize', fontFamily: MONO_STACK }}>
+                    {t}{favoritePaletteId === t && ' ★'}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {Object.keys(customPalettes).length > 0 && (
+              <>
+                <div style={{ fontSize: 10, color: '#86868B', fontFamily: MONO_STACK, marginBottom: 5 }}>Custom</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                  {Object.entries(customPalettes).map(([id, pal]) => (
+                    <div key={id} style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                      <PaletteSwatch palette={pal} size={18} selected={paletteId === id} onClick={() => { setPaletteId(id); persistSettings({ paletteId: id }); }} title="Custom" />
+                      <div style={{ fontSize: 9, color: paletteId === id ? '#0A84FF' : '#86868B', fontWeight: paletteId === id ? 600 : 400, fontFamily: MONO_STACK }}>
+                        custom{favoritePaletteId === id && ' ★'}
+                      </div>
+                      <button onClick={() => deleteCustomPalette(id)} className="hbtn" style={{ position: 'absolute', top: -4, right: -4, width: 14, height: 14, borderRadius: 7, background: '#FF3B30', color: '#FFF', border: 'none', cursor: 'pointer', fontSize: 8, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Generators */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              <button onClick={addRandomPalette} className="hbtn" style={{ padding: 10, fontSize: 11, fontWeight: 500, background: 'transparent', color: '#0A84FF', border: '0.5px dashed #0A84FF', borderRadius: 10, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                🎲 Random
+              </button>
+              <button onClick={() => paletteColorRef.current?.click()} className="hbtn" style={{ padding: 10, fontSize: 11, fontWeight: 500, background: 'transparent', color: '#0A84FF', border: '0.5px dashed #0A84FF', borderRadius: 10, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                🎨 From color
+              </button>
+              <input
+                ref={paletteColorRef} type="color"
+                onChange={e => addPaletteFromColor(e.target.value.toUpperCase())}
+                style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 0, height: 0 }}
+              />
+            </div>
+            <div style={{ fontSize: 10, color: '#86868B', marginTop: 6, fontFamily: MONO_STACK, textAlign: 'center' }}>
+              Pick any color to generate an 8-shade palette
+            </div>
+          </div>
+
+          {/* 06 Handle */}
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: 0.5, color: '#86868B', fontFamily: MONO_STACK, textTransform: 'uppercase', marginBottom: 8 }}>06 · handle</div>
+            <input value={handle} onChange={e => setHandle(e.target.value)} onBlur={() => persistSettings({ handle })} className="apple-input" style={{ fontFamily }} />
+          </div>
+
+          {/* 07 Photos */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div style={{ fontSize: 11, letterSpacing: 0.5, color: '#86868B', fontFamily: MONO_STACK, textTransform: 'uppercase' }}>
+                07 · photos{photos.length > 0 ? <span style={{ color: '#0A84FF', marginLeft: 5 }}>· {photos.length}</span> : null}
+              </div>
+              {photos.length > 0 && <button onClick={() => { setPhotos([]); clearAllPhotos(); }} className="hbtn" style={{ fontSize: 11, color: '#FF3B30', background: 'transparent', border: 'none', cursor: 'pointer' }}>Clear</button>}
+            </div>
+            <PhotoCatalog photos={photos} onReorder={setPhotos} onDelete={deletePhoto} onUpload={onUploadPhotos} />
+            {photos.length > 0 && slides && (
+              <div style={{ display: 'flex', gap: 5, marginTop: 8 }}>
+                <button onClick={autoAssignPhotos} className="hbtn" style={{ flex: 1, padding: 8, fontSize: 11, fontWeight: 500, background: '#F2F2F7', color: '#1D1D1F', border: 'none', borderRadius: 10, cursor: 'pointer' }}>⚡ Assign all</button>
+                <button onClick={alternatePhotos} className="hbtn" style={{ flex: 1, padding: 8, fontSize: 11, fontWeight: 500, background: '#F2F2F7', color: '#1D1D1F', border: 'none', borderRadius: 10, cursor: 'pointer' }}>◑ Alternate</button>
+                {hasAnyPhoto && <button onClick={clearAllPhotos} className="hbtn" style={{ padding: 8, fontSize: 11, background: '#F2F2F7', color: '#86868B', border: 'none', borderRadius: 10, cursor: 'pointer' }}>✕</button>}
+              </div>
+            )}
+          </div>
+
+          {slides && (
+            <button onClick={saveDraft} className="hbtn" style={{ padding: '11px 16px', fontSize: 13, fontWeight: 500, background: '#FFFFFF', color: '#1D1D1F', border: '0.5px solid #D2D2D7', borderRadius: 10, cursor: 'pointer' }}>+ Save draft</button>
+          )}
+        </aside>
+
+        {/* RIGHT */}
+        <section style={{ padding: 24, minHeight: 'calc(100vh - 57px)' }}>
+          {!slides && !loading && (
+            <div className="fade" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 500, textAlign: 'center', padding: 40 }}>
+              <div style={{ fontSize: 52, lineHeight: 1.05, color: '#1D1D1F', letterSpacing: '-0.04em', maxWidth: 720, fontWeight: 700 }}>
+                One hook in.<br /><span style={{ color: '#0A84FF' }}>N slides out.</span>
+              </div>
+              <div style={{ fontSize: 16, marginTop: 16, maxWidth: 500, lineHeight: 1.55, color: '#86868B' }}>
+                Type a hook. Pick a count. AI writes the carousel. Edit any slide inline with Bold · Italic · Underline · Color and line breaks.
+              </div>
+              <div style={{ marginTop: 24, fontSize: 11, color: '#86868B', fontFamily: MONO_STACK, display: 'flex', gap: 18, flexWrap: 'wrap', justifyContent: 'center' }}>
+                <span>✶ {FONTS.length} fonts</span><span>✶ Inline editor + colors</span><span>✶ Thai + English</span><span>✶ .zip export</span>
+              </div>
+            </div>
+          )}
+
+          {loading && !slides && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 500, flexDirection: 'column', gap: 14 }}>
+              <span className="spin" style={{ width: 30, height: 30, borderRadius: '50%', border: '3px solid #E5E5EA', borderTopColor: '#0A84FF' }} />
+              <div style={{ fontSize: 12, color: '#86868B', fontFamily: MONO_STACK }}>writing {slideCount} slides</div>
+            </div>
+          )}
+
+          {slides && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, gap: 16, flexWrap: 'wrap' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#86868B', fontFamily: MONO_STACK, textTransform: 'uppercase' }}>preview · {paletteId.startsWith('custom_') ? 'custom' : paletteId} · {slides.length} slides</div>
+                  <div style={{ fontSize: 19, fontWeight: 600, marginTop: 3, letterSpacing: '-0.02em', lineHeight: 1.3, fontFamily }}>{hook}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                  <button onClick={copyAllText} className="hbtn ghost-btn">{copied ? '✓ Copied' : '⎘ Copy text'}</button>
+                  {hasAnyPhoto && <button onClick={clearAllPhotos} className="hbtn ghost-btn">Clear photos</button>}
+                  <button onClick={generate} disabled={loading} className="hbtn ghost-btn">↻ Regenerate</button>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
+                {slides.map((slide, i) => {
+                  const cfg = getConfig(i);
+                  const photo = cfg.photoId ? photos.find(p => p.id === cfg.photoId) : null;
+                  const palette = palettes[i % palettes.length];
+                  const isEditing = editingIndex === i;
+                  return (
+                    <div key={i} className="slide-in"
+                      style={{
+                        borderRadius: 16, overflow: 'hidden', background: '#FFFFFF',
+                        border: '0.5px solid #E5E5EA',
+                        boxShadow: isEditing ? '0 20px 50px rgba(0,0,0,0.12)' : '0 1px 3px rgba(0,0,0,0.04), 0 6px 16px rgba(0,0,0,0.05)',
+                        animationDelay: `${i * 38}ms`,
+                        gridColumn: isEditing ? '1 / -1' : 'auto',
+                        transition: 'grid-column 300ms, box-shadow 200ms',
+                        position: 'relative',
+                        zIndex: isEditing ? 5 : 1,
+                      }}>
+                      <div style={{
+                        borderRadius: 16, overflow: 'hidden',
+                        maxWidth: isEditing ? 720 : 'auto', margin: isEditing ? '0 auto' : '0',
+                        transition: 'max-width 300ms',
+                      }}>
+                        <SlidePreview
+                          slide={slide} index={i} palette={palette} handle={handle}
+                          photo={photo} transform={cfg.transform} photoEnabled={cfg.photoEnabled !== false}
+                          fontFamily={fontFamily}
+                          fontScale={cfg.fontScale ?? 1}
+                          vAlign={cfg.vAlign || 'middle'}
+                          hAlign={cfg.hAlign || 'left'}
+                          editing={isEditing}
+                          onStartEdit={() => setEditingIndex(i)}
+                          onEndEdit={() => setEditingIndex(null)}
+                          onSaveSegments={(segs) => updateSlideSegments(i, segs)}
+                          onConfigChange={(updates) => setConfig(i, cur => ({ ...cur, ...updates }))}
+                          onTransformChange={t => updateTransform(i, t)}
+                          onOpenPicker={() => setPickerFor(i)}
+                          onRemovePhoto={() => removePhoto(i)}
+                          onTogglePhoto={() => togglePhoto(i)}
+                          onDownload={() => downloadSlide(i)}
+                          onResetTransform={() => resetTransform(i)}
+                        />
+                      </div>
+                      <div style={{ padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '0.5px solid #F0F0F0' }}>
+                        <div style={{ fontSize: 10, color: '#86868B', fontFamily: MONO_STACK, textTransform: 'uppercase', fontVariantNumeric: 'tabular-nums' }}>
+                          {String(i + 1).padStart(2, '0')} · {(slide.kind || '').toUpperCase()}
+                        </div>
+                        <div style={{ fontSize: 10, color: '#86868B', fontFamily: MONO_STACK }}>{segmentsToPlain(slide.segments || slide.text).split(/\s+/).filter(Boolean).length}w</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={{ marginTop: 28, padding: 18, borderRadius: 14, border: '0.5px solid #E5E5EA', background: '#FFFFFF' }}>
+                <div style={{ fontSize: 11, color: '#86868B', fontFamily: MONO_STACK, textTransform: 'uppercase', marginBottom: 8 }}>plain text</div>
+                <pre style={{ fontSize: 13, lineHeight: 1.8, whiteSpace: 'pre-wrap', margin: 0, color: '#1D1D1F', fontFamily }}>
+                  {slides.map((s, i) => `${i + 1}. ${segmentsToPlain(s.segments || s.text)}`).join('\n')}
+                </pre>
+              </div>
+            </>
+          )}
+        </section>
+      </main>
+
+      {pickerFor !== null && (
+        <PhotoPicker slideIndex={pickerFor} photos={photos} onClose={() => setPickerFor(null)} onPick={id => assignPhoto(pickerFor, id)} onUpload={onUploadPhotos} />
+      )}
+
+      {toast && (
+        <div className="fade" style={{
+          position: 'fixed', bottom: 28, left: '50%', transform: 'translateX(-50%)', zIndex: 200,
+          padding: '11px 20px', borderRadius: 999, background: 'rgba(29,29,31,0.92)', color: '#FFF',
+          fontSize: 13, fontWeight: 500, letterSpacing: -0.01,
+          backdropFilter: 'blur(20px) saturate(180%)', WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+          boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+        }}>{toast}</div>
+      )}
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<CarouselStudio />);
+</script>
+</body>
+</html>
